@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Cast To TV - Screen Mirroring Receiver</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+        }
+        #video-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Waiting for connection...</div>
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+    </div>
+
+    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <script>
+        const context = cast.framework.CastReceiverContext.getInstance();
+        const playerManager = context.getPlayerManager();
+        const statusDiv = document.getElementById('status');
+        const videoElement = document.getElementById('video');
+
+        // Configure the receiver
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600; // 1 hour
+
+        // Handle custom messages for screen mirroring
+        context.addCustomMessageListener('urn:x-cast:com.xxx.screenmirroring', function(customEvent) {
+            const data = customEvent.data;
+
+            if (data.type === 'SCREEN_DATA') {
+                // Handle incoming screen data
+                statusDiv.textContent = 'Screen mirroring active';
+
+                // Convert base64 data to blob and create object URL
+                if (data.videoData) {
+                    const byteCharacters = atob(data.videoData);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: 'video/mp4' });
+                    const url = URL.createObjectURL(blob);
+                    videoElement.src = url;
+                }
+            } else if (data.type === 'INIT_STREAM') {
+                statusDiv.textContent = 'Initializing stream...';
+            }
+        });
+
+        // Handle player events
+        playerManager.addEventListener(
+            cast.framework.events.category.CORE,
+            event => {
+                console.log('Player event:', event);
+            }
+        );
+
+        // Handle system events
+        context.addEventListener(
+            cast.framework.system.EventType.SENDER_CONNECTED,
+            event => {
+                statusDiv.textContent = 'Device connected';
+                console.log('Sender connected:', event);
+            }
+        );
+
+        context.addEventListener(
+            cast.framework.system.EventType.SENDER_DISCONNECTED,
+            event => {
+                statusDiv.textContent = 'Device disconnected';
+                console.log('Sender disconnected:', event);
+            }
+        );
+
+        context.addEventListener(
+            cast.framework.system.EventType.READY,
+            event => {
+                console.log('Receiver ready');
+            }
+        );
+
+        // Start the receiver
+        context.start(castReceiverOptions);
+        console.log('Cast receiver started');
+    </script>
+</body>
+</html>
+
