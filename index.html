@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Cast To TV - Screen Mirroring</title>
+    <title>Cast To TV - WebRTC Screen Mirroring</title>
     <style>
         body {
             margin: 0;
@@ -18,7 +18,7 @@
             align-items: center;
             background: #000;
         }
-        #screenImage {
+        #remoteVideo {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
@@ -35,13 +35,13 @@
             border-radius: 5px;
             z-index: 1000;
         }
-        #fps {
+        #stats {
             position: absolute;
             top: 60px;
             left: 20px;
             color: #0f0;
             font-family: 'Courier New', monospace;
-            font-size: 16px;
+            font-size: 14px;
             background: rgba(0,0,0,0.7);
             padding: 5px 10px;
             border-radius: 5px;
@@ -50,146 +50,189 @@
     </style>
 </head>
 <body>
-    <div id="status">Initializing...</div>
-    <div id="fps">FPS: 0</div>
+    <div id="status">Initializing WebRTC...</div>
+    <div id="stats">Waiting for connection...</div>
     <div id="video-container">
-        <img id="screenImage" alt="Screen Mirror">
+        <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script>
         const context = cast.framework.CastReceiverContext.getInstance();
         const statusEl = document.getElementById('status');
-        const fpsEl = document.getElementById('fps');
-        const screenImage = document.getElementById('screenImage');
-
-        let frameCount = 0;
-        let lastTime = Date.now();
-        let lastFrameTime = Date.now();
-
-        // Audio playback - OPTIMIZED
-        let audioContext = null;
-        let nextAudioTime = 0;
-        const AUDIO_BUFFER_TARGET = 0.1; // 100ms audio buffer
+        const statsEl = document.getElementById('stats');
+        const remoteVideo = document.getElementById('remoteVideo');
 
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
 
-        console.log('=== Cast Receiver Initializing ===');
-        console.log('Namespace:', NAMESPACE);
+        // WebRTC variables
+        let peerConnection = null;
+        let statsInterval = null;
+
+        console.log('=== WebRTC Cast Receiver Initializing ===');
 
         // Initialize Cast Receiver
         const castReceiverOptions = new cast.framework.CastReceiverOptions();
         castReceiverOptions.disableIdleTimeout = true;
         castReceiverOptions.maxInactivity = 3600;
 
-        // Initialize Web Audio API
-        function initAudio() {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                nextAudioTime = audioContext.currentTime;
-                console.log('Audio context initialized. Sample rate:', audioContext.sampleRate);
-            }
-        }
-
-        // Handle frame messages from Android app
+        // Handle WebRTC signaling messages
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
                 const data = customEvent.data;
+                console.log('Received message type:', data.type);
 
-                if (data.type === 'frame') {
-                    handleFrame(data);
-                } else if (data.type === 'audio') {
-                    handleAudio(data);
+                if (data.type === 'offer') {
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    handleIceCandidate(data);
                 }
             } catch (error) {
                 console.error('Error processing message:', error);
+                statusEl.textContent = 'Error: ' + error.message;
             }
         });
 
-        function handleFrame(data) {
+        async function handleOffer(data) {
             try {
-                // OPTIMIZATION: Direct assignment, no extra conversions
-                screenImage.src = 'data:image/jpeg;base64,' + data.data;
+                statusEl.textContent = '📡 Setting up WebRTC connection...';
 
-                frameCount++;
-                lastFrameTime = Date.now();
+                // Create peer connection
+                const configuration = {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ],
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require'
+                };
 
-                if (frameCount === 1) {
-                    statusEl.textContent = '✓ Screen Mirroring Active';
-                }
-            } catch (error) {
-                console.error('Error displaying frame:', error);
-            }
-        }
+                peerConnection = new RTCPeerConnection(configuration);
 
-        function handleAudio(data) {
-            try {
-                if (!audioContext) {
-                    initAudio();
-                }
-
-                // OPTIMIZATION: Faster audio decoding
-                const base64Audio = data.data;
-                const binaryString = atob(base64Audio);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-
-                const sampleRate = data.sampleRate || 44100;
-                const channels = data.channels || 1; // MONO now
-                const pcmData = new Int16Array(bytes.buffer);
-
-                // Create audio buffer
-                const audioBuffer = audioContext.createBuffer(channels, pcmData.length / channels, sampleRate);
-
-                // Convert PCM16 to Float32
-                for (let channel = 0; channel < channels; channel++) {
-                    const channelData = audioBuffer.getChannelData(channel);
-                    const stride = channels;
-                    for (let i = 0; i < channelData.length; i++) {
-                        channelData[i] = pcmData[i * stride + channel] / 32768.0;
+                // Handle incoming tracks (video + audio)
+                peerConnection.ontrack = (event) => {
+                    console.log('Received track:', event.track.kind);
+                    if (event.streams && event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        statusEl.textContent = '✅ Screen Mirroring Active (WebRTC)';
+                        startStatsMonitoring();
                     }
-                }
+                };
 
-                // OPTIMIZATION: Better audio scheduling to prevent gaps
-                const source = audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioContext.destination);
+                // Handle ICE connection state
+                peerConnection.oniceconnectionstatechange = () => {
+                    console.log('ICE Connection State:', peerConnection.iceConnectionState);
+                    if (peerConnection.iceConnectionState === 'disconnected' ||
+                        peerConnection.iceConnectionState === 'failed') {
+                        statusEl.textContent = '⚠️ Connection lost';
+                        stopStatsMonitoring();
+                    }
+                };
 
-                const currentTime = audioContext.currentTime;
+                // Handle ICE candidates
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        sendIceCandidate(event.candidate);
+                    }
+                };
 
-                // Schedule with small buffer to prevent gaps
-                if (nextAudioTime < currentTime + AUDIO_BUFFER_TARGET) {
-                    nextAudioTime = currentTime + AUDIO_BUFFER_TARGET;
-                }
+                // Set remote description (offer)
+                await peerConnection.setRemoteDescription({
+                    type: 'offer',
+                    sdp: data.sdp
+                });
 
-                source.start(nextAudioTime);
-                nextAudioTime += audioBuffer.duration;
+                // Create answer
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                // Send answer back to sender
+                sendAnswer(answer);
 
             } catch (error) {
-                console.error('Error processing audio:', error);
+                console.error('Error handling offer:', error);
+                statusEl.textContent = 'Error: ' + error.message;
             }
         }
 
-        // FPS counter
-        function startFPSCounter() {
-            setInterval(() => {
-                const now = Date.now();
-                const elapsed = (now - lastTime) / 1000;
-                const fps = Math.round(frameCount / elapsed);
-
-                const timeSinceLastFrame = now - lastFrameTime;
-                if (timeSinceLastFrame > 2000) {
-                    statusEl.textContent = '⚠ No frames received';
-                    fpsEl.textContent = 'FPS: 0';
-                } else {
-                    fpsEl.textContent = 'FPS: ' + fps;
+        async function handleIceCandidate(data) {
+            try {
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate({
+                        candidate: data.candidate,
+                        sdpMid: data.sdpMid,
+                        sdpMLineIndex: data.sdpMLineIndex
+                    });
                 }
+            } catch (error) {
+                console.error('Error adding ICE candidate:', error);
+            }
+        }
 
-                frameCount = 0;
-                lastTime = now;
+        function sendAnswer(answer) {
+            try {
+                const message = JSON.stringify({
+                    type: 'answer',
+                    sdp: answer.sdp
+                });
+                context.sendCustomMessage(NAMESPACE, undefined, message);
+                console.log('Sent WebRTC answer');
+            } catch (error) {
+                console.error('Error sending answer:', error);
+            }
+        }
+
+        function sendIceCandidate(candidate) {
+            try {
+                const message = JSON.stringify({
+                    type: 'ice_candidate',
+                    candidate: candidate.candidate,
+                    sdpMid: candidate.sdpMid,
+                    sdpMLineIndex: candidate.sdpMLineIndex
+                });
+                context.sendCustomMessage(NAMESPACE, undefined, message);
+            } catch (error) {
+                console.error('Error sending ICE candidate:', error);
+            }
+        }
+
+        function startStatsMonitoring() {
+            if (statsInterval) return;
+
+            statsInterval = setInterval(async () => {
+                if (!peerConnection) return;
+
+                try {
+                    const stats = await peerConnection.getStats();
+                    let fps = 0;
+                    let bitrate = 0;
+                    let resolution = '';
+
+                    stats.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+                            fps = report.framesPerSecond || 0;
+                            bitrate = Math.round((report.bytesReceived * 8) / 1000); // Kbps
+                        }
+                        if (report.type === 'track' && report.kind === 'video') {
+                            resolution = `${report.frameWidth}x${report.frameHeight}`;
+                        }
+                    });
+
+                    statsEl.innerHTML = `
+                        FPS: ${fps.toFixed(0)}<br>
+                        Bitrate: ${bitrate} Kbps<br>
+                        Resolution: ${resolution}
+                    `;
+                } catch (error) {
+                    console.error('Error getting stats:', error);
+                }
             }, 1000);
+        }
+
+        function stopStatsMonitoring() {
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
         }
 
         // System events
@@ -197,9 +240,7 @@
             cast.framework.system.EventType.SENDER_CONNECTED,
             function(event) {
                 console.log('Sender connected:', event.senderId);
-                statusEl.textContent = 'Device Connected - Waiting for stream...';
-                initAudio();
-                startFPSCounter();
+                statusEl.textContent = 'Device Connected - Waiting for WebRTC...';
             }
         );
 
@@ -208,14 +249,14 @@
             function(event) {
                 console.log('Sender disconnected');
                 statusEl.textContent = 'Device Disconnected';
-                fpsEl.textContent = 'FPS: 0';
-                screenImage.src = '';
-                frameCount = 0;
+                statsEl.textContent = '';
+                remoteVideo.srcObject = null;
 
-                if (audioContext) {
-                    audioContext.close();
-                    audioContext = null;
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
                 }
+                stopStatsMonitoring();
             }
         );
 
@@ -238,12 +279,13 @@
         // Start receiver
         try {
             context.start(castReceiverOptions);
-            console.log('=== Cast receiver started successfully ===');
+            console.log('=== WebRTC Cast receiver started ===');
         } catch (error) {
-            console.error('=== FAILED to start Cast receiver ===', error);
+            console.error('=== FAILED to start receiver ===', error);
             statusEl.textContent = 'FAILED TO START: ' + error.message;
             document.body.style.backgroundColor = 'red';
         }
     </script>
 </body>
 </html>
+
