@@ -1,22 +1,188 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Screen Mirror Receiver</title>
-    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
+    <meta charset="UTF-8">
+    <title>Cast To TV - Screen Mirroring</title>
     <style>
-        body { margin: 0; background-color: black; color: white; font-family: sans-serif; overflow: hidden; }
-        #message-overlay {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 2em; text-align: center;
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
         }
-        img {
-            width: 100vw; height: 100vh; object-fit: contain;
+        #video-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+        }
+        #screenImage {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 1000;
+        }
+        #fps {
+            position: absolute;
+            top: 60px;
+            left: 20px;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+            z-index: 1000;
         }
     </style>
 </head>
 <body>
-    <div id="message-overlay">Initializing Receiver...</div>
-    <!-- The image element will be created by receiver.js -->
-    <script src="receiver.js"></script>
+    <div id="status">Initializing...</div>
+    <div id="fps">FPS: 0</div>
+    <div id="video-container">
+        <img id="screenImage" alt="Screen Mirror">
+    </div>
+
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <script>
+        const context = cast.framework.CastReceiverContext.getInstance();
+        const statusEl = document.getElementById('status');
+        const fpsEl = document.getElementById('fps');
+        const screenImage = document.getElementById('screenImage');
+
+        let frameCount = 0;
+        let lastTime = Date.now();
+        let lastFrameTime = Date.now();
+
+        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+
+        console.log('=== Cast Receiver Initializing ===');
+        console.log('Namespace:', NAMESPACE);
+
+        // Initialize Cast Receiver
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600;
+
+        // Handle frame messages from Android app
+        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+            try {
+                const data = customEvent.data;
+                console.log('Received message type:', data.type);
+
+                if (data.type === 'frame') {
+                    handleFrame(data);
+                } else {
+                    console.log('Unknown message type:', data.type);
+                }
+            } catch (error) {
+                console.error('Error processing message:', error);
+                statusEl.textContent = 'Error occurred: ' + error.message;
+            }
+        });
+
+        function handleFrame(data) {
+            try {
+                // Convert base64 to image and display
+                const base64Image = data.data;
+                screenImage.src = 'data:image/jpeg;base64,' + base64Image;
+
+                // Update frame counter
+                frameCount++;
+                lastFrameTime = Date.now();
+
+                // Update status on first frame
+                if (frameCount === 1) {
+                    statusEl.textContent = '✓ Screen Mirroring Active';
+                    console.log('First frame received. Resolution: ' + data.width + 'x' + data.height);
+                }
+            } catch (error) {
+                console.error('Error displaying frame:', error);
+                statusEl.textContent = 'Error displaying frame';
+            }
+        }
+
+        // FPS counter
+        function startFPSCounter() {
+            setInterval(() => {
+                const now = Date.now();
+                const elapsed = (now - lastTime) / 1000;
+                const fps = Math.round(frameCount / elapsed);
+
+                // Check if we're still receiving frames
+                const timeSinceLastFrame = now - lastFrameTime;
+                if (timeSinceLastFrame > 2000) {
+                    statusEl.textContent = '⚠ No frames received';
+                    fpsEl.textContent = 'FPS: 0';
+                } else {
+                    fpsEl.textContent = 'FPS: ' + fps;
+                }
+
+                frameCount = 0;
+                lastTime = now;
+            }, 1000);
+        }
+
+        // System events
+        context.addEventListener(
+            cast.framework.system.EventType.SENDER_CONNECTED,
+            function(event) {
+                console.log('Sender connected:', event.senderId);
+                statusEl.textContent = 'Device Connected - Waiting for stream...';
+                startFPSCounter();
+            }
+        );
+
+        context.addEventListener(
+            cast.framework.system.EventType.SENDER_DISCONNECTED,
+            function(event) {
+                console.log('Sender disconnected');
+                statusEl.textContent = 'Device Disconnected';
+                fpsEl.textContent = 'FPS: 0';
+                screenImage.src = '';
+                frameCount = 0;
+            }
+        );
+
+        context.addEventListener(
+            cast.framework.system.EventType.READY,
+            function(event) {
+                console.log('Receiver ready');
+                statusEl.textContent = 'Ready - Waiting for connection...';
+            }
+        );
+
+        context.addEventListener(
+            cast.framework.system.EventType.ERROR,
+            function(event) {
+                console.error('Cast Receiver Error:', event);
+                statusEl.textContent = 'Error: ' + event.error;
+            }
+        );
+
+        // Start receiver
+        try {
+            context.start(castReceiverOptions);
+            console.log('=== Cast receiver started successfully ===');
+            console.log('Custom message namespace registered:', NAMESPACE);
+        } catch (error) {
+            console.error('=== FAILED to start Cast receiver ===', error);
+            statusEl.textContent = 'FAILED TO START: ' + error.message;
+            document.body.style.backgroundColor = 'red';
+        }
+    </script>
 </body>
 </html>
