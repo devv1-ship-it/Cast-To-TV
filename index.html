@@ -1,15 +1,22 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Receiver Test</title>
-</head>
-<body style="background-color: green; color: white; font-size: 5em; text-align: center;">
-    Receiver Loaded!
+    <title>Screen Mirror Receiver</title>
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
-    <script>
-        // Even with a simple test, you need to start the context
-        const context = cast.framework.CastReceiverContext.getInstance();
-        context.start();
-    </script>
+    <style>
+        body { margin: 0; background-color: black; color: white; font-family: sans-serif; overflow: hidden; }
+        #message-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 2em; text-align: center;
+        }
+        img {
+            width: 100vw; height: 100vh; object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+    <div id="message-overlay">Initializing Receiver...</div>
+    <!-- The image element will be created by receiver.js -->
+    <script src="receiver.js"></script>
 </body>
 </html>
