@@ -21,7 +21,7 @@
         #remoteVideo {
             width: 100%;
             height: 100%;
-            object-fit: contain;
+            object-fit: contain; /* Ensures the whole screen fits */
             background: #000;
         }
         #status {
@@ -54,16 +54,21 @@
     <div id="status">Initializing WebRTC...</div>
     <div id="stats">Waiting for connection...</div>
     <div id="video-container">
+        <!-- 'autoplay' and 'playsinline' are critical for mobile/browser playback policies -->
         <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
+    <!-- Load the Cast Application Framework (CAF) Receiver SDK -->
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+
+    <!-- Custom WebRTC Logic -->
     <script>
         const context = cast.framework.CastReceiverContext.getInstance();
         const statusEl = document.getElementById('status');
         const statsEl = document.getElementById('stats');
         const remoteVideo = document.getElementById('remoteVideo');
 
+        // This NAMESPACE MUST match the one in your Android code (ScreenCaptureServiceWebRTC)
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
 
         // WebRTC variables
@@ -74,15 +79,27 @@
 
         console.log('=== WebRTC Cast Receiver Initializing ===');
 
-        // Initialize Cast Receiver with optimizations
+        // Configure Cast Receiver for continuous mirroring (disable idle timeout)
         const castReceiverOptions = new cast.framework.CastReceiverOptions();
         castReceiverOptions.disableIdleTimeout = true;
         castReceiverOptions.maxInactivity = 3600;
 
-        // Handle WebRTC signaling messages
+        // ====================================================================
+        // Custom Message Listener (Handling Signaling)
+        // ====================================================================
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
-                const data = customEvent.data;
+                let data = customEvent.data;
+                // Robustly parse the message (Cast SDK sometimes sends it as an escaped string)
+                if (typeof data === 'string') {
+                    try {
+                        data = JSON.parse(data);
+                    } catch(e) {
+                         // The message might be a stringified JSON object, try one more time
+                         data = JSON.parse(data.trim('"').replace(/\\/g, ""));
+                    }
+                }
+                
                 console.log('Received message type:', data.type);
 
                 if (data.type === 'offer') {
@@ -96,126 +113,100 @@
             }
         });
 
+        // ====================================================================
+        // WebRTC Offer/Answer and Connection Logic
+        // ====================================================================
         async function handleOffer(data) {
             try {
                 console.log('Handling offer from sender');
                 statusEl.textContent = '📡 Setting up WebRTC connection...';
 
-                // Create peer connection with optimized settings
+                // 1. Create Peer Connection
                 const configuration = {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' }
-                    ],
-                    bundlePolicy: 'max-bundle',
-                    rtcpMuxPolicy: 'require',
-                    iceTransportPolicy: 'all'
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                    sdpSemantics: 'unified-plan'
                 };
-
                 peerConnection = new RTCPeerConnection(configuration);
-                console.log('PeerConnection created');
 
-                // Handle incoming tracks (video + audio)
+                // 2. Handle Incoming Tracks (Video + Audio)
                 peerConnection.ontrack = (event) => {
-                    console.log('✓ Received track:', event.track.kind, 'id:', event.track.id, 'readyState:', event.track.readyState);
-                    console.log('Streams count:', event.streams.length);
-                    
+                    console.log('✓ Received track:', event.track.kind);
+
                     if (event.streams && event.streams[0]) {
-                        console.log('Setting srcObject to video element');
+                        console.log('Attaching stream to video element...');
                         remoteVideo.srcObject = event.streams[0];
                         
-                        // Set volume to maximum
-                        remoteVideo.volume = 1.0;
-                        
-                        // Force play
+                        // Force video playback, addressing browser autoplay policies.
+                        remoteVideo.muted = false; // Try with audio first
                         remoteVideo.play().then(() => {
-                            console.log('✓✓✓ Video playback started successfully!');
+                            console.log('✓✓✓ Video playback started successfully (with sound)!');
                             statusEl.textContent = '✅ Screen Mirroring Active';
-                            
-                            // Log video element state
-                            console.log('Video element state:', {
-                                paused: remoteVideo.paused,
-                                muted: remoteVideo.muted,
-                                volume: remoteVideo.volume,
-                                videoWidth: remoteVideo.videoWidth,
-                                videoHeight: remoteVideo.videoHeight,
-                                readyState: remoteVideo.readyState
-                            });
-                            
                             startStatsMonitoring();
                         }).catch(err => {
-                            console.error('✗ Error starting video playback:', err);
-                            statusEl.textContent = 'Error playing video: ' + err.message;
+                            console.error('✗ Playback failed, trying again MUTED:', err);
+                            // If it fails (common policy restriction), try again muted.
+                            remoteVideo.muted = true;
+                            remoteVideo.play().then(() => {
+                                console.log('✓✓✓ Video playback started (muted)!');
+                                statusEl.textContent = '✅ Screen Mirroring Active (Audio Muted)';
+                                startStatsMonitoring();
+                            }).catch(err2 => {
+                                console.error('✗ Playback failed even when muted:', err2);
+                                statusEl.textContent = 'Error: Could not play video.';
+                            });
                         });
-                    } else {
-                        console.warn('No streams in track event!');
                     }
                 };
 
-                // Handle ICE connection state
+                // 3. Handle Other Connection Events (Logging)
                 peerConnection.oniceconnectionstatechange = () => {
-                    console.log('ICE Connection State:', peerConnection.iceConnectionState);
                     const state = peerConnection.iceConnectionState;
-                    
+                    console.log('ICE Connection State:', state);
                     if (state === 'connected' || state === 'completed') {
-                        console.log('✓ ICE connected!');
                         statusEl.textContent = '✅ Connected - Waiting for video...';
                     } else if (state === 'disconnected') {
                         statusEl.textContent = '⚠️ Connection lost';
                     } else if (state === 'failed') {
                         statusEl.textContent = '❌ Connection failed';
-                        console.error('ICE connection failed');
                         stopStatsMonitoring();
                     } else if (state === 'checking') {
                         statusEl.textContent = '🔄 Connecting...';
                     }
                 };
-
-                // Handle connection state
-                peerConnection.onconnectionstatechange = () => {
-                    console.log('Connection State:', peerConnection.connectionState);
-                };
-
-                // Handle ICE candidates
                 peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
-                        console.log('Generated ICE candidate:', event.candidate.type);
                         sendIceCandidate(event.candidate);
-                    } else {
-                        console.log('ICE gathering complete');
                     }
                 };
 
-                // Set remote description (offer)
-                console.log('Setting remote description...');
-                await peerConnection.setRemoteDescription({
+                // 4. Set Remote Description (Offer) and Create Answer
+                await peerConnection.setRemoteDescription(new RTCSessionDescription({
                     type: 'offer',
                     sdp: data.sdp
-                });
+                }));
                 console.log('✓ Remote description set');
 
-                // Create answer
-                console.log('Creating answer...');
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
                 console.log('✓ Local description (answer) set');
 
-                // Send answer back to sender
+                // 5. Send Answer Back to Sender
                 sendAnswer(answer);
 
             } catch (error) {
                 console.error('✗ Error handling offer:', error);
-                statusEl.textContent = 'Error: ' + error.message;
+                statusEl.textContent = 'Fatal Error: ' + error.message;
             }
         }
 
         async function handleIceCandidate(data) {
             try {
-                if (peerConnection) {
-                    await peerConnection.addIceCandidate({
+                if (peerConnection && data.candidate) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate({
                         candidate: data.candidate,
                         sdpMid: data.sdpMid,
                         sdpMLineIndex: data.sdpMLineIndex
-                    });
+                    }));
                     console.log('✓ Added ICE candidate from sender');
                 }
             } catch (error) {
@@ -223,35 +214,43 @@
             }
         }
 
+        // ====================================================================
+        // Signaling (Sending Messages via Cast Channel)
+        // ====================================================================
         function sendAnswer(answer) {
-            try {
-                const message = JSON.stringify({
-                    type: 'answer',
-                    sdp: answer.sdp
-                });
-                context.sendCustomMessage(NAMESPACE, undefined, message);
-                console.log('✓ Sent WebRTC answer to sender');
-            } catch (error) {
-                console.error('Error sending answer:', error);
-            }
+            sendMessage({ type: 'answer', sdp: answer.sdp });
+            console.log('✓ Sent WebRTC answer to sender');
         }
 
         function sendIceCandidate(candidate) {
+            sendMessage({
+                type: 'ice_candidate',
+                candidate: candidate.candidate,
+                sdpMid: candidate.sdpMid,
+                sdpMLineIndex: candidate.sdpMLineIndex
+            });
+        }
+
+        function sendMessage(messageObject) {
             try {
-                const message = JSON.stringify({
-                    type: 'ice_candidate',
-                    candidate: candidate.candidate,
-                    sdpMid: candidate.sdpMid,
-                    sdpMLineIndex: candidate.sdpMLineIndex
-                });
-                context.sendCustomMessage(NAMESPACE, undefined, message);
+                const messageString = JSON.stringify(messageObject);
+                // Use the context to send the message back to the Android sender
+                context.sendCustomMessage(NAMESPACE, undefined, messageString);
             } catch (error) {
-                console.error('Error sending ICE candidate:', error);
+                console.error('Error sending message:', error, messageObject);
             }
         }
 
+        // ====================================================================
+        // Stats and Monitoring
+        // ====================================================================
         function startStatsMonitoring() {
             if (statsInterval) return;
+            statsEl.textContent = 'Monitoring...';
+
+            let lastBytesReceived = 0;
+            let lastTimestamp = Date.now();
+            let videoTrackId = remoteVideo.srcObject.getVideoTracks()[0].id;
 
             statsInterval = setInterval(async () => {
                 if (!peerConnection) return;
@@ -260,31 +259,32 @@
                     const stats = await peerConnection.getStats();
                     let fps = 0;
                     let bitrate = 0;
-                    let resolution = '';
+                    let resolution = 'N/A';
                     let packetsLost = 0;
+                    let jitter = 0;
 
                     stats.forEach(report => {
                         if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
                             fps = report.framesPerSecond || 0;
                             packetsLost = report.packetsLost || 0;
-                            
-                            // Calculate bitrate
+                            jitter = (report.jitter * 1000).toFixed(1) || 0; // ms
+
                             const now = Date.now();
                             const timeDiff = (now - lastTimestamp) / 1000;
                             const bytesDiff = (report.bytesReceived || 0) - lastBytesReceived;
                             bitrate = Math.round((bytesDiff * 8) / timeDiff / 1000); // Kbps
-                            
+
                             lastBytesReceived = report.bytesReceived || 0;
                             lastTimestamp = now;
                         }
-                        if (report.type === 'track' && report.kind === 'video') {
-                            resolution = `${report.frameWidth}x${report.frameHeight}`;
+                        if (report.type === 'track' && report.trackIdentifier === videoTrackId) {
+                            resolution = `${report.frameWidth || 'N/A'}x${report.frameHeight || 'N/A'}`;
                         }
                     });
 
-                    statsEl.innerHTML = `FPS: ${fps.toFixed(0)} | ${bitrate} Kbps | ${resolution}<br>Lost: ${packetsLost} packets`;
+                    statsEl.innerHTML = `FPS: ${fps.toFixed(0)} | ${bitrate} Kbps | ${resolution}<br>Lost: ${packetsLost} | Jitter: ${jitter}ms`;
                 } catch (error) {
-                    console.error('Error getting stats:', error);
+                    // console.error('Error getting stats:', error); // Silence this to prevent console clutter
                 }
             }, 1000);
         }
@@ -294,9 +294,12 @@
                 clearInterval(statsInterval);
                 statsInterval = null;
             }
+            statsEl.textContent = 'Waiting for connection...';
         }
 
-        // System events
+        // ====================================================================
+        // Receiver Lifecycle (Cast SDK)
+        // ====================================================================
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(event) {
             console.log('✓ Sender connected:', event.senderId);
             statusEl.textContent = 'Device Connected - Waiting for stream...';
@@ -305,14 +308,12 @@
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, function(event) {
             console.log('Sender disconnected');
             statusEl.textContent = 'Device Disconnected';
-            statsEl.textContent = '';
-            remoteVideo.srcObject = null;
-
+            stopStatsMonitoring();
+            remoteVideo.srcObject = null; // Clear video
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
             }
-            stopStatsMonitoring();
         });
 
         context.addEventListener(cast.framework.system.EventType.READY, function(event) {
