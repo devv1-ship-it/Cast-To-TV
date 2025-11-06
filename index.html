@@ -25,18 +25,24 @@
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
     
     <script>
-        const statusEl = document.getElementById('status');
-        const errorEl = document.getElementById('error-display');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        
-        // --- THE FIX: Wait for the 'load' event before running any Cast code ---
-        window.cast.framework.CastReceiverContext.getInstance().addEventListener(
-            cast.framework.system.EventType.READY, 
-            initializeApp
-        );
+        // --- THE DEFINITIVE FIX ---
+        // The Cast SDK will automatically call this function when the 'cast' API is ready.
+        // All of our application code MUST go inside this function.
+        window.__onGCastApiAvailable = function(isAvailable) {
+            if (isAvailable) {
+                initializeApp();
+            } else {
+                document.getElementById('status').textContent = 'FATAL: Cast API not available.';
+                document.getElementById('error-display').textContent = 'Please reboot Chromecast.';
+            }
+        };
 
         function initializeApp() {
+            const statusEl = document.getElementById('status');
+            const errorEl = document.getElementById('error-display');
+            const remoteVideo = document.getElementById('remoteVideo');
+            const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+            
             const context = cast.framework.CastReceiverContext.getInstance();
             const castReceiverOptions = new cast.framework.CastReceiverOptions();
             castReceiverOptions.disableIdleTimeout = true;
@@ -75,6 +81,7 @@
                     }
                 });
 
+                // Now it's safe to start the context
                 context.start(castReceiverOptions);
 
             } catch (e) {
@@ -95,7 +102,14 @@
                     };
 
                     peerConnection.onicecandidate = (event) => {
-                        if (event.candidate) sendMessage(event.candidate);
+                        if (event.candidate) {
+                            sendMessage({
+                                type: 'ice_candidate',
+                                candidate: event.candidate.candidate,
+                                sdpMid: event.candidate.sdpMid,
+                                sdpMLineIndex: event.candidate.sdpMLineIndex
+                            });
+                        }
                     };
                     
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
@@ -119,14 +133,9 @@
                 }
             }
 
-            function sendMessage(candidate) {
+            function sendMessage(messageObject) {
                 try {
-                    context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify({
-                        type: 'ice_candidate',
-                        candidate: candidate.candidate,
-                        sdpMid: candidate.sdpMid,
-                        sdpMLineIndex: candidate.sdpMLineIndex
-                    }));
+                    context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
                 } catch (e) {
                     displayError('Send Message', e);
                 }
