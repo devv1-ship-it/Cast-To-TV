@@ -2,117 +2,44 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>MSE Screen Mirroring Receiver</title>
+    <title>MJPEG Screen Mirroring</title>
     <style>
         body { margin: 0; background-color: black; }
-        video { width: 100vw; height: 100vh; object-fit: contain; }
+        img { width: 100vw; height: 100vh; object-fit: contain; }
     </style>
 </head>
 <body>
-    <video id="remoteVideo"></video>
+    <img id="stream-image" />
 
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
     <script>
-        const remoteVideo = document.getElementById('remoteVideo');
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        
-        let context = null;
-        let mediaSource = null;
-        let videoSourceBuffer;
-        let audioSourceBuffer;
-        let videoQueue = [];
-        let audioQueue = [];
-        let isFirstFrame = true;
+        window.__onGCastApiAvailable = function(isAvailable) {
+            if (isAvailable) initializeApp();
+        };
 
-        // YOUR PROVEN INITIALIZATION LOGIC
-        try {
-            context = cast.framework.CastReceiverContext.getInstance();
+        function initializeApp() {
+            const streamImage = document.getElementById('stream-image');
+            const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+            
+            const context = cast.framework.CastReceiverContext.getInstance();
             const castReceiverOptions = new cast.framework.CastReceiverOptions();
             castReceiverOptions.disableIdleTimeout = true;
 
             context.addCustomMessageListener(NAMESPACE, (customEvent) => {
-                // This is the MSE message handling logic
                 try {
                     const message = JSON.parse(customEvent.data);
-                    
-                    const binaryString = window.atob(message.data);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
+                    if (message.type === 'frame' && message.data) {
+                        // This is the entire logic. Update the image source.
+                        streamImage.src = `data:image/jpeg;base64,${message.data}`;
                     }
-                    const frameData = bytes.buffer;
-
-                    if (message.type === 'video') {
-                        appendToBuffer(frameData, videoQueue, videoSourceBuffer);
-                    } else if (message.type === 'audio') {
-                        appendToBuffer(frameData, audioQueue, audioSourceBuffer);
-                    }
-
-                    if (isFirstFrame && remoteVideo.buffered.length > 0 && remoteVideo.buffered.end(0) > 0.1) {
-                        isFirstFrame = false;
-                        remoteVideo.play().catch(e => console.error("Autoplay failed:", e));
-                    }
-                } catch (e) { console.error('Message processing error:', e); }
+                } catch (e) { /* Ignore parsing errors */ }
             });
             
             context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                window.location.reload(); // Simple way to reset state on disconnect
+                window.location.reload();
             });
 
             context.start(castReceiverOptions);
-            console.log("Cast context started.");
-
-        } catch (e) {
-            console.error('Cast SDK Initialization Error:', e);
-            // Fallback if initialization fails
-            setTimeout(() => {
-                if (!context) {
-                    console.error("Retrying Cast context initialization...");
-                    window.location.reload(); // Force a full reload as a fallback
-                }
-            }, 3000);
-        }
-
-        // MSE INITIALIZATION
-        try {
-            mediaSource = new MediaSource();
-            remoteVideo.src = URL.createObjectURL(mediaSource);
-
-            mediaSource.addEventListener('sourceopen', () => {
-                console.log('MediaSource is open. Ready for data.');
-                try {
-                    const videoCodec = 'video/mp4; codecs="avc1.42E01E"';
-                    const audioCodec = 'audio/mp4; codecs="mp4a.40.2"';
-
-                    videoSourceBuffer = mediaSource.addSourceBuffer(videoCodec);
-                    audioSourceBuffer = mediaSource.addSourceBuffer(audioCodec);
-                    
-                    videoSourceBuffer.addEventListener('updateend', () => processQueue(videoQueue, videoSourceBuffer));
-                    audioSourceBuffer.addEventListener('updateend', () => processQueue(audioQueue, audioSourceBuffer));
-                    console.log('Source buffers created.');
-                } catch (e) {
-                    console.error("Error creating source buffers:", e);
-                }
-            });
-        } catch(e) {
-            console.error("MediaSource API Error:", e);
-        }
-
-        function processQueue(queue, buffer) {
-            if (queue.length > 0 && buffer && !buffer.updating) {
-                try { buffer.appendBuffer(queue.shift()); } catch (e) { console.error("Error appending buffer:", e); }
-            }
-        }
-        
-        function appendToBuffer(data, queue, buffer) {
-            if (buffer) {
-                if (!buffer.updating) {
-                    try { buffer.appendBuffer(data); } catch (e) { queue.push(data); }
-                } else {
-                    queue.push(data);
-                }
-            }
         }
     </script>
 </body>
