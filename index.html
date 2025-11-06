@@ -53,7 +53,7 @@
             try {
                 updateStatus('Step 6: Message Received (type: ' + customEvent.data.type + ')');
                 let data = customEvent.data;
-                
+
                 // Handle both string and object data
                 if (typeof data === 'string') {
                     data = JSON.parse(data);
@@ -102,8 +102,8 @@
         try {
             updateStatus('Step 7: Handling Offer...');
             console.log('Offer SDP length:', data.sdp ? data.sdp.length : 'missing');
-            
-            const configuration = { 
+
+            const configuration = {
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
                 bundlePolicy: 'max-bundle',
                 rtcpMuxPolicy: 'require'
@@ -111,15 +111,27 @@
             peerConnection = new RTCPeerConnection(configuration);
             console.log('PeerConnection created');
 
+            // CRITICAL: Set up track handler BEFORE setting remote description
             peerConnection.ontrack = (event) => {
                 updateStatus('Step 11: ✅ Track Received! Kind: ' + event.track.kind);
                 console.log('Track kind:', event.track.kind, 'Streams:', event.streams.length);
-                
+                console.log('Track ID:', event.track.id, 'Track state:', event.track.readyState);
+
                 if (event.streams && event.streams[0]) {
-                    console.log('Setting srcObject...');
-                    remoteVideo.srcObject = event.streams[0];
-                    remoteVideo.volume = 1.0;
+                    console.log('Setting srcObject... Stream ID:', event.streams[0].id);
                     
+                    // Set srcObject immediately for the first track
+                    if (!remoteVideo.srcObject) {
+                        remoteVideo.srcObject = event.streams[0];
+                        console.log('✓ srcObject set for the first time');
+                    } else if (remoteVideo.srcObject.id !== event.streams[0].id) {
+                        // Update if it's a different stream
+                        remoteVideo.srcObject = event.streams[0];
+                        console.log('✓ srcObject updated with new stream');
+                    }
+                    
+                    remoteVideo.volume = 1.0;
+
                     remoteVideo.play().then(() => {
                         updateStatus('✅✅✅ VIDEO PLAYING!');
                         document.body.style.backgroundColor = '#006600'; // Bright green = video playing
@@ -127,9 +139,12 @@
                             paused: remoteVideo.paused,
                             videoWidth: remoteVideo.videoWidth,
                             videoHeight: remoteVideo.videoHeight,
-                            volume: remoteVideo.volume
+                            volume: remoteVideo.volume,
+                            readyState: remoteVideo.readyState,
+                            networkState: remoteVideo.networkState
                         });
                     }).catch(e => {
+                        console.error('Play error:', e);
                         displayError('Video Play', e);
                     });
                 } else {
@@ -137,10 +152,22 @@
                 }
             };
 
+            // Log when tracks are added
+            peerConnection.addEventListener('track', (e) => {
+                console.log('TRACK EVENT FIRED!', e.track.kind);
+            });
+
             peerConnection.oniceconnectionstatechange = () => {
                 console.log('ICE Connection State:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
                     updateStatus('Step 12: ✅ ICE CONNECTED!');
+                    
+                    // Check if we have tracks
+                    const receivers = peerConnection.getReceivers();
+                    console.log('Total receivers:', receivers.length);
+                    receivers.forEach((receiver, index) => {
+                        console.log(`Receiver ${index}:`, receiver.track ? receiver.track.kind : 'no track');
+                    });
                 }
             };
 
@@ -164,6 +191,18 @@
                 sdp: data.sdp
             }));
             console.log('✓ Remote description set');
+            
+            // Log transceivers after setting remote description
+            const transceivers = peerConnection.getTransceivers();
+            console.log('Transceivers count:', transceivers.length);
+            transceivers.forEach((transceiver, index) => {
+                console.log(`Transceiver ${index}:`, {
+                    mid: transceiver.mid,
+                    direction: transceiver.direction,
+                    currentDirection: transceiver.currentDirection,
+                    receiver: transceiver.receiver.track ? transceiver.receiver.track.kind : 'no track'
+                });
+            });
 
             updateStatus('Step 9: Creating Answer...');
             const answer = await peerConnection.createAnswer();
@@ -173,6 +212,28 @@
             updateStatus('Step 10: Sending Answer...');
             sendMessage({ type: 'answer', sdp: answer.sdp });
             console.log('✓ Answer sent');
+            
+            // Force check for tracks after a short delay
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Delayed check - Receivers:', receivers.length);
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`Delayed track found ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                        // If track exists but wasn't fired via ontrack, manually trigger it
+                        if (remoteVideo.srcObject === null && receiver.track.readyState === 'live') {
+                            console.warn('Track exists but ontrack not fired! Manually setting...');
+                            const stream = new MediaStream([receiver.track]);
+                            remoteVideo.srcObject = stream;
+                            remoteVideo.volume = 1.0;
+                            remoteVideo.play().then(() => {
+                                updateStatus('✅✅✅ VIDEO PLAYING (manual)!');
+                                document.body.style.backgroundColor = '#006600';
+                            }).catch(e => console.error('Manual play error:', e));
+                        }
+                    }
+                });
+            }, 2000);
 
         } catch (e) {
             displayError('Handle Offer', e);
