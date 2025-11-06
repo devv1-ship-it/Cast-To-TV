@@ -2,143 +2,125 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>WebRTC Screen Mirroring</title>
+    <title>Cast To TV - WebRTC Screen Mirroring</title>
     <style>
         body {
             margin: 0;
+            padding: 0;
             background-color: #000;
-            color: white;
-            font-family: Arial, sans-serif;
+            overflow: hidden;
         }
-        #remoteVideo {
+        #video-container {
             width: 100vw;
             height: 100vh;
-            object-fit: contain;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+        }
+        #remoteVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain; /* Ensures the whole screen fits */
             background: #000;
         }
         #status {
             position: absolute;
             top: 20px;
             left: 20px;
-            font-size: 1.2em;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
             background: rgba(0,0,0,0.7);
-            padding: 10px 15px;
+            padding: 10px 20px;
             border-radius: 5px;
-            z-index: 100;
+            z-index: 1000;
+        }
+        #stats {
+            position: absolute;
+            top: 60px;
+            left: 20px;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+            z-index: 1000;
         }
     </style>
 </head>
 <body>
-<div id="status">Connecting...</div>
-<video id="remoteVideo" autoplay playsinline></video>
+<div id="status">Initializing WebRTC...</div>
+<div id="stats">Waiting for connection...</div>
+<div id="video-container">
+    <!-- 'autoplay' and 'playsinline' are critical for mobile/browser playback policies -->
+    <video id="remoteVideo" autoplay playsinline></video>
+</div>
 
+<!-- Load the Cast Application Framework (CAF) Receiver SDK -->
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-<script>
-    const statusEl = document.getElementById('status');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-    let peerConnection = null;
-    let context = null;
 
-    // Audio playback components
+<!-- Custom WebRTC Logic -->
+<script>
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const statusEl = document.getElementById('status');
+    const statsEl = document.getElementById('stats');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    // This NAMESPACE MUST match the one in your Android code (ScreenCaptureServiceWebRTC)
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+
+    // WebRTC variables
+    let peerConnection = null;
+    let statsInterval = null;
+    let lastBytesReceived = 0;
+    let lastTimestamp = Date.now();
+
+    // Audio playback for system audio
     let audioContext = null;
     let audioQueue = [];
     let isPlayingAudio = false;
-    let nextPlayTime = 0;
+    let nextStartTime = 0;
 
-    try {
-        context = cast.framework.CastReceiverContext.getInstance();
-        const castReceiverOptions = new cast.framework.CastReceiverOptions();
-        castReceiverOptions.disableIdleTimeout = true;
-        castReceiverOptions.maxInactivity = 3600;
+    console.log('=== WebRTC Cast Receiver Initializing ===');
 
-        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-            try {
-                let data = customEvent.data;
-                if (typeof data === 'string') {
-                    data = JSON.parse(data);
-                }
-
-                if (data.type === 'offer') {
-                    handleOffer(data);
-                } else if (data.type === 'ice_candidate') {
-                    handleIceCandidate(data);
-                } else if (data.type === 'audio') {
-                    handleAudioData(data);
-                }
-            } catch (e) {
-                console.error('Message processing error:', e);
-            }
-        });
-
-        context.addEventListener(cast.framework.system.EventType.READY, () => {
-            statusEl.textContent = 'Ready';
-            console.log('Receiver ready');
-            initializeAudioContext();
-        });
-
-        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-            statusEl.textContent = 'Connected - Waiting for stream...';
-            console.log('Sender connected:', event.senderId);
-        });
-
-        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-            statusEl.textContent = 'Disconnected';
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            remoteVideo.srcObject = null;
-            stopAudioPlayback();
-        });
-
-        context.start(castReceiverOptions);
-
-    } catch (e) {
-        console.error('Init error:', e);
-        statusEl.textContent = 'Error: ' + e.message;
-    }
-
-    function initializeAudioContext() {
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 48000,
-                latencyHint: 'interactive'
-            });
-            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
-        } catch (e) {
-            console.error('Failed to initialize AudioContext:', e);
-        }
-    }
-
-    function handleAudioData(data) {
+    // Initialize Web Audio API
+    function initAudioContext() {
         if (!audioContext) {
-            console.warn('AudioContext not initialized');
-            return;
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            console.log('✓ Audio context initialized, sample rate:', audioContext.sampleRate);
         }
+    }
 
+    // Play audio chunk received from Android
+    function playAudioChunk(base64Data, sampleRate, channels) {
         try {
-            // Decode base64 audio data
-            const binaryString = atob(data.data);
+            if (!audioContext) {
+                initAudioContext();
+            }
+
+            // Decode base64 to ArrayBuffer
+            const binaryString = atob(base64Data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
             }
 
-            // Convert PCM bytes to Float32Array
+            // Convert to Int16Array (PCM 16-bit)
             const int16Array = new Int16Array(bytes.buffer);
+            
+            // Convert to Float32Array for Web Audio API
             const float32Array = new Float32Array(int16Array.length);
             for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
+                float32Array[i] = int16Array[i] / 32768.0; // Normalize to -1.0 to 1.0
             }
 
-            // Split stereo data into left and right channels
-            const channels = data.channels || 2;
+            // Create audio buffer
             const samplesPerChannel = float32Array.length / channels;
+            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, sampleRate);
 
-            // Create AudioBuffer
-            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
-
+            // Fill buffer with audio data
             if (channels === 2) {
                 const leftChannel = audioBuffer.getChannelData(0);
                 const rightChannel = audioBuffer.getChannelData(1);
@@ -148,119 +130,143 @@
                 }
             } else {
                 const channelData = audioBuffer.getChannelData(0);
-                for (let i = 0; i < samplesPerChannel; i++) {
-                    channelData[i] = float32Array[i];
+                channelData.set(float32Array);
+            }
+
+            // Schedule playback
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+
+            const currentTime = audioContext.currentTime;
+            if (nextStartTime < currentTime) {
+                nextStartTime = currentTime;
+            }
+
+            source.start(nextStartTime);
+            nextStartTime += audioBuffer.duration;
+
+        } catch (error) {
+            console.error('Error playing audio chunk:', error);
+        }
+    }
+
+    // ====================================================================
+    // Custom Message Listener (Handling Signaling)
+    // ====================================================================
+    context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+        try {
+            let data = customEvent.data;
+            // Robustly parse the message (Cast SDK sometimes sends it as an escaped string)
+            if (typeof data === 'string') {
+                try {
+                    data = JSON.parse(data);
+                } catch(e) {
+                     // The message might be a stringified JSON object, try one more time
+                     data = JSON.parse(data.trim('"').replace(/\\/g, ""));
                 }
             }
 
-            playAudioBuffer(audioBuffer);
-        } catch (e) {
-            console.error('Error processing audio data:', e);
-        }
-    }
+            console.log('Received message type:', data.type);
 
-    function playAudioBuffer(audioBuffer) {
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-
-        // Schedule playback
-        const currentTime = audioContext.currentTime;
-        if (nextPlayTime < currentTime) {
-            nextPlayTime = currentTime;
-        }
-
-        source.start(nextPlayTime);
-        nextPlayTime += audioBuffer.duration;
-    }
-
-    function stopAudioPlayback() {
-        audioQueue = [];
-        isPlayingAudio = false;
-        nextPlayTime = 0;
-        if (audioContext) {
-            try {
-                audioContext.close();
-                audioContext = null;
-            } catch (e) {
-                console.error('Error closing AudioContext:', e);
+            if (data.type === 'offer') {
+                handleOffer(data);
+            } else if (data.type === 'ice_candidate') {
+                handleIceCandidate(data);
+            } else if (data.type === 'audio') {
+                // Handle incoming audio data
+                console.log('Received audio data');
+                playAudioChunk(data.payload.data, data.payload.sampleRate, data.payload.channels);
             }
+        } catch (error) {
+            console.error('Error processing message:', error);
+            statusEl.textContent = 'Error: ' + error.message;
         }
-    }
+    });
 
+    // ====================================================================
+    // WebRTC Offer/Answer and Connection Logic
+    // ====================================================================
     async function handleOffer(data) {
         try {
-            console.log('Handling offer');
+            console.log('Handling offer from sender');
+            statusEl.textContent = '📡 Setting up WebRTC connection...';
 
+            // 1. Create Peer Connection
             const configuration = {
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                bundlePolicy: 'max-bundle',
-                rtcpMuxPolicy: 'require'
+                sdpSemantics: 'unified-plan'
             };
             peerConnection = new RTCPeerConnection(configuration);
 
-            let streamSet = false;
-
+            // 2. Handle Incoming Tracks (Video + Audio)
             peerConnection.ontrack = (event) => {
-                console.log('Track received:', event.track.kind);
+                console.log('✓ Received track:', event.track.kind);
 
                 if (event.streams && event.streams[0]) {
-                    if (!streamSet) {
-                        console.log('Setting video stream');
-                        remoteVideo.srcObject = event.streams[0];
-                        streamSet = true;
+                    console.log('Attaching stream to video element...');
+                    remoteVideo.srcObject = event.streams[0];
 
+                    // Force video playback, addressing browser autoplay policies.
+                    remoteVideo.muted = false; // Try with audio first
+                    remoteVideo.play().then(() => {
+                        console.log('✓✓✓ Video playback started successfully (with sound)!');
+                        statusEl.textContent = '✅ Screen Mirroring Active';
+                        startStatsMonitoring();
+                    }).catch(err => {
+                        console.error('✗ Playback failed, trying again MUTED:', err);
+                        // If it fails (common policy restriction), try again muted.
+                        remoteVideo.muted = true;
                         remoteVideo.play().then(() => {
-                            console.log('Video playback started');
-                            statusEl.textContent = 'Streaming (Video + System Audio)';
-                        }).catch(e => console.error('Play failed:', e));
-                    }
-                }
-            };
-
-            peerConnection.oniceconnectionstatechange = () => {
-                console.log('ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected') {
-                    statusEl.textContent = 'Streaming (Video + System Audio)';
-                }
-            };
-
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    sendMessage({
-                        type: 'ice_candidate',
-                        candidate: event.candidate.candidate,
-                        sdpMid: event.candidate.sdpMid,
-                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                            console.log('✓✓✓ Video playback started (muted)!');
+                            statusEl.textContent = '✅ Screen Mirroring Active (Audio Muted)';
+                            startStatsMonitoring();
+                        }).catch(err2 => {
+                            console.error('✗ Playback failed even when muted:', err2);
+                            statusEl.textContent = 'Error: Could not play video.';
+                        });
                     });
                 }
             };
 
+            // 3. Handle Other Connection Events (Logging)
+            peerConnection.oniceconnectionstatechange = () => {
+                const state = peerConnection.iceConnectionState;
+                console.log('ICE Connection State:', state);
+                if (state === 'connected' || state === 'completed') {
+                    statusEl.textContent = '✅ Connected - Waiting for video...';
+                } else if (state === 'disconnected') {
+                    statusEl.textContent = '⚠️ Connection lost';
+                } else if (state === 'failed') {
+                    statusEl.textContent = '❌ Connection failed';
+                    stopStatsMonitoring();
+                } else if (state === 'checking') {
+                    statusEl.textContent = '🔄 Connecting...';
+                }
+            };
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendIceCandidate(event.candidate);
+                }
+            };
+
+            // 4. Set Remote Description (Offer) and Create Answer
             await peerConnection.setRemoteDescription(new RTCSessionDescription({
                 type: 'offer',
                 sdp: data.sdp
             }));
-            console.log('Remote description set');
+            console.log('✓ Remote description set');
 
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
-            console.log('Answer created');
+            console.log('✓ Local description (answer) set');
 
-            sendMessage({ type: 'answer', sdp: answer.sdp });
+            // 5. Send Answer Back to Sender
+            sendAnswer(answer);
 
-            setTimeout(() => {
-                const receivers = peerConnection.getReceivers();
-                console.log('Receivers:', receivers.length);
-                receivers.forEach((receiver, index) => {
-                    if (receiver.track) {
-                        console.log(`Track ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
-                    }
-                });
-            }, 1500);
-
-        } catch (e) {
-            console.error('Offer handling error:', e);
-            statusEl.textContent = 'Error: ' + e.message;
+        } catch (error) {
+            console.error('✗ Error handling offer:', error);
+            statusEl.textContent = 'Fatal Error: ' + error.message;
         }
     }
 
@@ -272,19 +278,128 @@
                     sdpMid: data.sdpMid,
                     sdpMLineIndex: data.sdpMLineIndex
                 }));
+                console.log('✓ Added ICE candidate from sender');
             }
-        } catch (e) {
-            console.error('ICE candidate error:', e);
+        } catch (error) {
+            console.error('Error adding ICE candidate:', error);
         }
+    }
+
+    // ====================================================================
+    // Signaling (Sending Messages via Cast Channel)
+    // ====================================================================
+    function sendAnswer(answer) {
+        sendMessage({ type: 'answer', sdp: answer.sdp });
+        console.log('✓ Sent WebRTC answer to sender');
+    }
+
+    function sendIceCandidate(candidate) {
+        sendMessage({
+            type: 'ice_candidate',
+            candidate: candidate.candidate,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex
+        });
     }
 
     function sendMessage(messageObject) {
         try {
-            const messageStr = JSON.stringify(messageObject);
-            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-        } catch (e) {
-            console.error('Send message error:', e);
+            const messageString = JSON.stringify(messageObject);
+            // Use the context to send the message back to the Android sender
+            context.sendCustomMessage(NAMESPACE, undefined, messageString);
+        } catch (error) {
+            console.error('Error sending message:', error, messageObject);
         }
+    }
+
+    // ====================================================================
+    // Stats and Monitoring
+    // ====================================================================
+    function startStatsMonitoring() {
+        if (statsInterval) return;
+        statsEl.textContent = 'Monitoring...';
+
+        let lastBytesReceived = 0;
+        let lastTimestamp = Date.now();
+        let videoTrackId = remoteVideo.srcObject.getVideoTracks()[0].id;
+
+        statsInterval = setInterval(async () => {
+            if (!peerConnection) return;
+
+            try {
+                const stats = await peerConnection.getStats();
+                let fps = 0;
+                let bitrate = 0;
+                let resolution = 'N/A';
+                let packetsLost = 0;
+                let jitter = 0;
+
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+                        fps = report.framesPerSecond || 0;
+                        packetsLost = report.packetsLost || 0;
+                        jitter = (report.jitter * 1000).toFixed(1) || 0; // ms
+
+                        const now = Date.now();
+                        const timeDiff = (now - lastTimestamp) / 1000;
+                        const bytesDiff = (report.bytesReceived || 0) - lastBytesReceived;
+                        bitrate = Math.round((bytesDiff * 8) / timeDiff / 1000); // Kbps
+
+                        lastBytesReceived = report.bytesReceived || 0;
+                        lastTimestamp = now;
+                    }
+                    if (report.type === 'track' && report.trackIdentifier === videoTrackId) {
+                        resolution = `${report.frameWidth || 'N/A'}x${report.frameHeight || 'N/A'}`;
+                    }
+                });
+
+                statsEl.innerHTML = `FPS: ${fps.toFixed(0)} | ${bitrate} Kbps | ${resolution}<br>Lost: ${packetsLost} | Jitter: ${jitter}ms`;
+            } catch (error) {
+                // console.error('Error getting stats:', error); // Silence this to prevent console clutter
+            }
+        }, 1000);
+    }
+
+    function stopStatsMonitoring() {
+        if (statsInterval) {
+            clearInterval(statsInterval);
+            statsInterval = null;
+        }
+        statsEl.textContent = 'Waiting for connection...';
+    }
+
+    // ====================================================================
+    // Receiver Lifecycle (Cast SDK)
+    // ====================================================================
+    context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(event) {
+        console.log('✓ Sender connected:', event.senderId);
+        statusEl.textContent = 'Device Connected - Waiting for stream...';
+    });
+
+    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, function(event) {
+        console.log('Sender disconnected');
+        statusEl.textContent = 'Device Disconnected';
+        stopStatsMonitoring();
+        remoteVideo.srcObject = null; // Clear video
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+    });
+
+    context.addEventListener(cast.framework.system.EventType.READY, function(event) {
+        console.log('✓ Receiver ready');
+        statusEl.textContent = 'Ready - Waiting for connection...';
+    });
+
+    // Start receiver
+    try {
+        context.start(castReceiverOptions);
+        console.log('=== ✓✓✓ WebRTC Cast receiver started successfully ===');
+    } catch (error) {
+        console.error('=== ✗✗✗ FAILED to start receiver ===', error);
+        statusEl.textContent = 'FAILED: ' + error.message;
+        document.body.style.backgroundColor = '#ff0000';
     }
 </script>
 </body>
