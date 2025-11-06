@@ -2,93 +2,187 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>MSE Screen Mirroring Receiver</title>
+    <title>WebRTC Screen Mirroring</title>
     <style>
-        body { margin: 0; background-color: black; }
-        video { width: 100vw; height: 100vh; object-fit: contain; }
+        body {
+            margin: 0;
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #remoteVideo {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            background: #000;
+        }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 1.2em;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
-    <video id="remoteVideo"></video>
+    <div id="status">Connecting...</div>
+    <video id="remoteVideo" autoplay playsinline muted="false" volume="1.0"></video>
+    
+    <!-- AUDIO FIX: Add a separate, invisible audio element as a fallback -->
+    <audio id="remoteAudio" autoplay></audio>
 
-    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script>
+        const statusEl = document.getElementById('status');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const remoteAudio = document.getElementById('remoteAudio'); // AUDIO FIX: Get reference
+        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+        let peerConnection = null;
+        let context = null;
+
+        // Use the official SDK loader to prevent race conditions
         window.__onGCastApiAvailable = function(isAvailable) {
-            if (isAvailable) initializeApp();
+            if (isAvailable) {
+                initializeApp();
+            } else {
+                statusEl.textContent = 'FATAL: Cast API not available.';
+            }
         };
 
         function initializeApp() {
-            const remoteVideo = document.getElementById('remoteVideo');
-            const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-            
-            const context = cast.framework.CastReceiverContext.getInstance();
-            const castReceiverOptions = new cast.framework.CastReceiverOptions();
-            castReceiverOptions.disableIdleTimeout = true;
+            try {
+                context = cast.framework.CastReceiverContext.getInstance();
+                const castReceiverOptions = new cast.framework.CastReceiverOptions();
+                castReceiverOptions.disableIdleTimeout = true;
 
-            let mediaSource = new MediaSource();
-            remoteVideo.src = URL.createObjectURL(mediaSource);
-
-            let videoSourceBuffer;
-            let audioSourceBuffer;
-            let videoQueue = [];
-            let audioQueue = [];
-            let isFirstFrame = true;
-
-            mediaSource.addEventListener('sourceopen', () => {
-                try {
-                    const videoCodec = 'video/mp4; codecs="avc1.42E01E"';
-                    const audioCodec = 'audio/mp4; codecs="mp4a.40.2"';
-                    videoSourceBuffer = mediaSource.addSourceBuffer(videoCodec);
-                    audioSourceBuffer = mediaSource.addSourceBuffer(audioCodec);
-                    videoSourceBuffer.addEventListener('updateend', () => processQueue(videoQueue, videoSourceBuffer));
-                    audioSourceBuffer.addEventListener('updateend', () => processQueue(audioQueue, audioSourceBuffer));
-                    console.log('Source buffers created.');
-                } catch (e) {
-                    console.error("Error creating source buffers:", e);
-                }
-            });
-
-            function processQueue(queue, buffer) {
-                if (queue.length > 0 && buffer && !buffer.updating) {
+                context.addCustomMessageListener(NAMESPACE, function(customEvent) {
                     try {
-                        buffer.appendBuffer(queue.shift());
-                    } catch (e) { console.error("Error appending buffer:", e); }
-                }
+                        let data = customEvent.data;
+                        if (typeof data === 'string') data = JSON.parse(data);
+                        if (data.type === 'offer') handleOffer(data);
+                        else if (data.type === 'ice_candidate') handleIceCandidate(data);
+                    } catch (e) { console.error('Message processing error:', e); }
+                });
+
+                context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+                    statusEl.textContent = 'Disconnected';
+                    if (peerConnection) peerConnection.close();
+                    remoteVideo.srcObject = null;
+                    remoteAudio.srcObject = null; // AUDIO FIX
+                });
+
+                context.start(castReceiverOptions);
+                statusEl.textContent = 'Ready for Connection...';
+
+            } catch (e) {
+                console.error('Init error:', e);
+                statusEl.textContent = 'Error: ' + e.message;
             }
-            
-            // We now expect a JSON string, not binary data
-            context.addCustomMessageListener(NAMESPACE, (customEvent) => {
-                try {
-                    const message = JSON.parse(customEvent.data);
+        }
+
+        async function handleOffer(data) {
+            try {
+                console.log('Handling offer');
+                peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+                let streamSet = false;
+
+                // PRIMARY METHOD: Handle tracks as they arrive
+                peerConnection.ontrack = (event) => {
+                    console.log('Track received:', event.track.kind);
                     
-                    // --- THE FIX ---
-                    // Decode the Base64 string back into binary data (Uint8Array)
-                    const binaryString = window.atob(message.data);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    const frameData = bytes.buffer;
-
-                    if (message.type === 'video') {
-                        if (videoSourceBuffer && !videoSourceBuffer.updating) {
-                            try { videoSourceBuffer.appendBuffer(frameData); } catch (e) { videoQueue.push(frameData); }
-                        } else { videoQueue.push(frameData); }
-                    } else if (message.type === 'audio') {
-                        if (audioSourceBuffer && !audioSourceBuffer.updating) {
-                            try { audioSourceBuffer.appendBuffer(frameData); } catch (e) { audioQueue.push(frameData); }
-                        } else { audioQueue.push(frameData); }
+                    if (event.track.kind === 'audio') {
+                        // AUDIO FIX: Attach stream to the separate audio element
+                        if (remoteAudio.srcObject !== event.streams[0]) {
+                            remoteAudio.srcObject = event.streams[0];
+                        }
                     }
 
-                    if (isFirstFrame && remoteVideo.buffered.length > 0 && remoteVideo.buffered.end(0) > 0.1) {
-                        isFirstFrame = false;
-                        remoteVideo.play().catch(e => console.error("Autoplay failed:", e));
+                    if (event.streams && event.streams[0] && !streamSet) {
+                        streamSet = true;
+                        remoteVideo.srcObject = event.streams[0];
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+                        
+                        remoteVideo.play().then(() => {
+                            console.log('Playback started via ontrack');
+                            statusEl.textContent = 'Playing';
+                            
+                            // AUDIO FIX: Also play the separate audio element
+                            remoteAudio.play().catch(e => console.error('Audio element play failed:', e));
+                            
+                            // Aggressively enable all audio tracks on the stream
+                            remoteVideo.srcObject.getAudioTracks().forEach(track => track.enabled = true);
+                        }).catch(e => console.error('Play failed:', e));
                     }
-                } catch (e) { console.error('Message processing error:', e); }
-            });
+                };
 
-            context.start(castReceiverOptions);
+                peerConnection.oniceconnectionstatechange = () => { console.log('ICE state:', peerConnection.iceConnectionState); };
+                peerConnection.onicecandidate = (event) => { if (event.candidate) sendMessage(event.candidate); };
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                sendMessage({ type: 'answer', sdp: answer.sdp });
+
+                // YOUR TIMEOUT CODE - RESTORED AND RESPECTED
+                setTimeout(() => {
+                    if (streamSet) return; // Don't run fallback if ontrack already worked
+
+                    const receivers = peerConnection.getReceivers();
+                    console.log('Delayed fallback check - Receivers:', receivers.length);
+                    const validTracks = receivers.map(r => r.track).filter(t => t && t.readyState === 'live');
+
+                    if (validTracks.length > 0) {
+                        console.warn('ontrack may have failed. Manually setting stream from fallback.');
+                        streamSet = true;
+                        
+                        const videoTracks = validTracks.filter(t => t.kind === 'video');
+                        const audioTracks = validTracks.filter(t => t.kind === 'audio');
+                        
+                        // Set video stream
+                        remoteVideo.srcObject = new MediaStream(videoTracks);
+                        // AUDIO FIX: Set audio stream on separate element
+                        remoteAudio.srcObject = new MediaStream(audioTracks);
+
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+                        remoteAudio.muted = false;
+                        remoteAudio.volume = 1.0;
+
+                        remoteVideo.play().then(() => {
+                            console.log('Manual video playback started');
+                            remoteAudio.play().catch(e => console.error('Manual audio play failed:', e));
+                        }).catch(e => console.error('Manual video play error:', e));
+                    }
+                }, 2000); // 2 second delay
+
+            } catch (e) {
+                console.error('Offer handling error:', e);
+            }
+        }
+
+        async function handleIceCandidate(data) {
+            try {
+                if (peerConnection && data.candidate) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+                }
+            } catch (e) { console.error('ICE candidate error:', e); }
+        }
+
+        function sendMessage(candidate) {
+            try {
+                const messageObject = candidate.type === 'answer' ? candidate : {
+                    type: 'ice_candidate',
+                    candidate: candidate.candidate,
+                    sdpMid: candidate.sdpMid,
+                    sdpMLineIndex: candidate.sdpMLineIndex
+                };
+                context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
+            } catch (e) { console.error('Send message error:', e); }
         }
     </script>
 </body>
