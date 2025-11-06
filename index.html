@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>MSE Screen Mirroring</title>
+    <title>MSE Screen Mirroring Receiver</title>
     <style>
         body { margin: 0; background-color: black; }
         video { width: 100vw; height: 100vh; object-fit: contain; }
@@ -10,6 +10,7 @@
 </head>
 <body>
     <video id="remoteVideo"></video>
+
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
     <script>
         window.__onGCastApiAvailable = function(isAvailable) {
@@ -31,52 +32,58 @@
             let audioSourceBuffer;
             let videoQueue = [];
             let audioQueue = [];
+            let isFirstFrame = true;
 
             mediaSource.addEventListener('sourceopen', () => {
-                console.log('MediaSource is open. Ready for data.');
-                // Codecs must match what MediaCodec produces on Android
-                videoSourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
-                audioSourceBuffer = mediaSource.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
-
-                videoSourceBuffer.addEventListener('updateend', () => processQueue(videoQueue, videoSourceBuffer));
-                audioSourceBuffer.addEventListener('updateend', () => processQueue(audioQueue, audioSourceBuffer));
+                try {
+                    const videoCodec = 'video/mp4; codecs="avc1.42E01E"';
+                    const audioCodec = 'audio/mp4; codecs="mp4a.40.2"';
+                    videoSourceBuffer = mediaSource.addSourceBuffer(videoCodec);
+                    audioSourceBuffer = mediaSource.addSourceBuffer(audioCodec);
+                    videoSourceBuffer.addEventListener('updateend', () => processQueue(videoQueue, videoSourceBuffer));
+                    audioSourceBuffer.addEventListener('updateend', () => processQueue(audioQueue, audioSourceBuffer));
+                    console.log('Source buffers created.');
+                } catch (e) {
+                    console.error("Error creating source buffers:", e);
+                }
             });
 
             function processQueue(queue, buffer) {
-                if (queue.length > 0 && !buffer.updating) {
-                    buffer.appendBuffer(queue.shift());
+                if (queue.length > 0 && buffer && !buffer.updating) {
+                    try {
+                        buffer.appendBuffer(queue.shift());
+                    } catch (e) { console.error("Error appending buffer:", e); }
                 }
             }
             
+            // We now expect a JSON string, not binary data
             context.addCustomMessageListener(NAMESPACE, (customEvent) => {
                 try {
-                    const message = customEvent.data;
-                    // We expect binary data now, not JSON
-                    if (message instanceof ArrayBuffer) {
-                        const dataView = new DataView(message);
-                        const type = dataView.getUint8(0); // 1 for video, 2 for audio
+                    const message = JSON.parse(customEvent.data);
+                    
+                    // --- THE FIX ---
+                    // Decode the Base64 string back into binary data (Uint8Array)
+                    const binaryString = window.atob(message.data);
+                    const len = binaryString.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    const frameData = bytes.buffer;
 
-                        // The rest of the data is the raw frame
-                        const frameData = message.slice(1);
+                    if (message.type === 'video') {
+                        if (videoSourceBuffer && !videoSourceBuffer.updating) {
+                            try { videoSourceBuffer.appendBuffer(frameData); } catch (e) { videoQueue.push(frameData); }
+                        } else { videoQueue.push(frameData); }
+                    } else if (message.type === 'audio') {
+                        if (audioSourceBuffer && !audioSourceBuffer.updating) {
+                            try { audioSourceBuffer.appendBuffer(frameData); } catch (e) { audioQueue.push(frameData); }
+                        } else { audioQueue.push(frameData); }
+                    }
 
-                        if (type === 1) { // Video
-                            if (videoSourceBuffer && !videoSourceBuffer.updating) {
-                                videoSourceBuffer.appendBuffer(frameData);
-                            } else {
-                                videoQueue.push(frameData);
-                            }
-                        } else if (type === 2) { // Audio
-                            if (audioSourceBuffer && !audioSourceBuffer.updating) {
-                                audioSourceBuffer.appendBuffer(frameData);
-                            } else {
-                                audioQueue.push(frameData);
-                            }
-                        }
-
-                        // Start playback if we have buffered enough
-                        if (remoteVideo.paused && remoteVideo.buffered.length > 0 && remoteVideo.buffered.end(0) > 0.1) {
-                            remoteVideo.play().catch(e => console.error("Play failed:", e));
-                        }
+                    if (isFirstFrame && remoteVideo.buffered.length > 0 && remoteVideo.buffered.end(0) > 0.1) {
+                        isFirstFrame = false;
+                        remoteVideo.play().catch(e => console.error("Autoplay failed:", e));
                     }
                 } catch (e) { console.error('Message processing error:', e); }
             });
