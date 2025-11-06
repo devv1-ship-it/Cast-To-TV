@@ -19,9 +19,10 @@
             background: #000;
         }
         #remoteVideo {
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
+            background: #000;
         }
         #status {
             position: absolute;
@@ -53,7 +54,7 @@
     <div id="status">Initializing WebRTC...</div>
     <div id="stats">Waiting for connection...</div>
     <div id="video-container">
-        <video id="remoteVideo" autoplay playsinline muted></video>
+        <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
@@ -97,6 +98,7 @@
 
         async function handleOffer(data) {
             try {
+                console.log('Handling offer from sender');
                 statusEl.textContent = '📡 Setting up WebRTC connection...';
 
                 // Create peer connection with optimized settings
@@ -106,29 +108,46 @@
                     ],
                     bundlePolicy: 'max-bundle',
                     rtcpMuxPolicy: 'require',
-                    // Optimize for low latency
                     iceTransportPolicy: 'all'
                 };
 
                 peerConnection = new RTCPeerConnection(configuration);
+                console.log('PeerConnection created');
 
                 // Handle incoming tracks (video + audio)
                 peerConnection.ontrack = (event) => {
-                    console.log('Received track:', event.track.kind, 'readyState:', event.track.readyState);
+                    console.log('✓ Received track:', event.track.kind, 'id:', event.track.id, 'readyState:', event.track.readyState);
+                    console.log('Streams count:', event.streams.length);
+                    
                     if (event.streams && event.streams[0]) {
+                        console.log('Setting srcObject to video element');
                         remoteVideo.srcObject = event.streams[0];
-
-                        // Unmute video after receiving stream (muted initially to prevent echo)
-                        remoteVideo.muted = false;
-
+                        
+                        // Set volume to maximum
+                        remoteVideo.volume = 1.0;
+                        
                         // Force play
                         remoteVideo.play().then(() => {
-                            console.log('Video playback started');
-                            statusEl.textContent = '✅ Screen Mirroring Active (WebRTC)';
+                            console.log('✓✓✓ Video playback started successfully!');
+                            statusEl.textContent = '✅ Screen Mirroring Active';
+                            
+                            // Log video element state
+                            console.log('Video element state:', {
+                                paused: remoteVideo.paused,
+                                muted: remoteVideo.muted,
+                                volume: remoteVideo.volume,
+                                videoWidth: remoteVideo.videoWidth,
+                                videoHeight: remoteVideo.videoHeight,
+                                readyState: remoteVideo.readyState
+                            });
+                            
                             startStatsMonitoring();
                         }).catch(err => {
-                            console.error('Error starting video playback:', err);
+                            console.error('✗ Error starting video playback:', err);
+                            statusEl.textContent = 'Error playing video: ' + err.message;
                         });
+                    } else {
+                        console.warn('No streams in track event!');
                     }
                 };
 
@@ -136,13 +155,15 @@
                 peerConnection.oniceconnectionstatechange = () => {
                     console.log('ICE Connection State:', peerConnection.iceConnectionState);
                     const state = peerConnection.iceConnectionState;
-
+                    
                     if (state === 'connected' || state === 'completed') {
-                        statusEl.textContent = '✅ Connected';
+                        console.log('✓ ICE connected!');
+                        statusEl.textContent = '✅ Connected - Waiting for video...';
                     } else if (state === 'disconnected') {
-                        statusEl.textContent = '⚠️ Connection lost - Reconnecting...';
+                        statusEl.textContent = '⚠️ Connection lost';
                     } else if (state === 'failed') {
                         statusEl.textContent = '❌ Connection failed';
+                        console.error('ICE connection failed');
                         stopStatsMonitoring();
                     } else if (state === 'checking') {
                         statusEl.textContent = '🔄 Connecting...';
@@ -160,27 +181,29 @@
                         console.log('Generated ICE candidate:', event.candidate.type);
                         sendIceCandidate(event.candidate);
                     } else {
-                        console.log('ICE candidate gathering complete');
+                        console.log('ICE gathering complete');
                     }
                 };
 
                 // Set remote description (offer)
+                console.log('Setting remote description...');
                 await peerConnection.setRemoteDescription({
                     type: 'offer',
                     sdp: data.sdp
                 });
-                console.log('Remote description (offer) set');
+                console.log('✓ Remote description set');
 
-                // Create answer with optimized constraints
+                // Create answer
+                console.log('Creating answer...');
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
-                console.log('Local description (answer) set');
+                console.log('✓ Local description (answer) set');
 
                 // Send answer back to sender
                 sendAnswer(answer);
 
             } catch (error) {
-                console.error('Error handling offer:', error);
+                console.error('✗ Error handling offer:', error);
                 statusEl.textContent = 'Error: ' + error.message;
             }
         }
@@ -193,7 +216,7 @@
                         sdpMid: data.sdpMid,
                         sdpMLineIndex: data.sdpMLineIndex
                     });
-                    console.log('Added ICE candidate from sender');
+                    console.log('✓ Added ICE candidate from sender');
                 }
             } catch (error) {
                 console.error('Error adding ICE candidate:', error);
@@ -207,7 +230,7 @@
                     sdp: answer.sdp
                 });
                 context.sendCustomMessage(NAMESPACE, undefined, message);
-                console.log('✓ Sent WebRTC answer');
+                console.log('✓ Sent WebRTC answer to sender');
             } catch (error) {
                 console.error('Error sending answer:', error);
             }
@@ -239,20 +262,18 @@
                     let bitrate = 0;
                     let resolution = '';
                     let packetsLost = 0;
-                    let jitter = 0;
 
                     stats.forEach(report => {
                         if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
                             fps = report.framesPerSecond || 0;
                             packetsLost = report.packetsLost || 0;
-                            jitter = report.jitter || 0;
-
+                            
                             // Calculate bitrate
                             const now = Date.now();
                             const timeDiff = (now - lastTimestamp) / 1000;
                             const bytesDiff = (report.bytesReceived || 0) - lastBytesReceived;
                             bitrate = Math.round((bytesDiff * 8) / timeDiff / 1000); // Kbps
-
+                            
                             lastBytesReceived = report.bytesReceived || 0;
                             lastTimestamp = now;
                         }
@@ -261,11 +282,7 @@
                         }
                     });
 
-                    statsEl.innerHTML = `
-                        FPS: ${fps.toFixed(0)} | Bitrate: ${bitrate} Kbps<br>
-                        Resolution: ${resolution}<br>
-                        Packets Lost: ${packetsLost} | Jitter: ${jitter.toFixed(3)}s
-                    `;
+                    statsEl.innerHTML = `FPS: ${fps.toFixed(0)} | ${bitrate} Kbps | ${resolution}<br>Lost: ${packetsLost} packets`;
                 } catch (error) {
                     console.error('Error getting stats:', error);
                 }
@@ -280,54 +297,37 @@
         }
 
         // System events
-        context.addEventListener(
-            cast.framework.system.EventType.SENDER_CONNECTED,
-            function(event) {
-                console.log('Sender connected:', event.senderId);
-                statusEl.textContent = 'Device Connected - Waiting for WebRTC...';
-            }
-        );
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(event) {
+            console.log('✓ Sender connected:', event.senderId);
+            statusEl.textContent = 'Device Connected - Waiting for stream...';
+        });
 
-        context.addEventListener(
-            cast.framework.system.EventType.SENDER_DISCONNECTED,
-            function(event) {
-                console.log('Sender disconnected');
-                statusEl.textContent = 'Device Disconnected';
-                statsEl.textContent = '';
-                remoteVideo.srcObject = null;
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, function(event) {
+            console.log('Sender disconnected');
+            statusEl.textContent = 'Device Disconnected';
+            statsEl.textContent = '';
+            remoteVideo.srcObject = null;
 
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
-                }
-                stopStatsMonitoring();
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
             }
-        );
+            stopStatsMonitoring();
+        });
 
-        context.addEventListener(
-            cast.framework.system.EventType.READY,
-            function(event) {
-                console.log('Receiver ready');
-                statusEl.textContent = 'Ready - Waiting for connection...';
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.ERROR,
-            function(event) {
-                console.error('Cast Receiver Error:', event);
-                statusEl.textContent = 'Error: ' + event.error;
-            }
-        );
+        context.addEventListener(cast.framework.system.EventType.READY, function(event) {
+            console.log('✓ Receiver ready');
+            statusEl.textContent = 'Ready - Waiting for connection...';
+        });
 
         // Start receiver
         try {
             context.start(castReceiverOptions);
-            console.log('=== WebRTC Cast receiver started ===');
+            console.log('=== ✓✓✓ WebRTC Cast receiver started successfully ===');
         } catch (error) {
-            console.error('=== FAILED to start receiver ===', error);
-            statusEl.textContent = 'FAILED TO START: ' + error.message;
-            document.body.style.backgroundColor = 'red';
+            console.error('=== ✗✗✗ FAILED to start receiver ===', error);
+            statusEl.textContent = 'FAILED: ' + error.message;
+            document.body.style.backgroundColor = '#ff0000';
         }
     </script>
 </body>
