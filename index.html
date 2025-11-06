@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <title>WebRTC Screen Mirroring</title>
     <style>
-        body { 
-            margin: 0; 
-            background-color: #000; 
-            color: white; 
+        body {
+            margin: 0;
+            background-color: #000;
+            color: white;
             font-family: Arial, sans-serif;
         }
         #remoteVideo {
@@ -17,13 +17,13 @@
             background: #000;
         }
         #status {
-            position: absolute; 
-            top: 20px; 
-            left: 20px; 
+            position: absolute;
+            top: 20px;
+            left: 20px;
             font-size: 1.2em;
-            background: rgba(0,0,0,0.7); 
-            padding: 10px 15px; 
-            border-radius: 5px; 
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
             z-index: 100;
         }
     </style>
@@ -92,7 +92,7 @@
     async function handleOffer(data) {
         try {
             console.log('Handling offer');
-            
+
             const configuration = {
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
                 bundlePolicy: 'max-bundle',
@@ -107,7 +107,7 @@
             // CRITICAL: Handle tracks as they arrive
             peerConnection.ontrack = (event) => {
                 console.log('Track received:', event.track.kind);
-                
+
                 if (event.track.kind === 'video') videoReady = true;
                 if (event.track.kind === 'audio') audioReady = true;
 
@@ -117,18 +117,18 @@
                         console.log('Setting stream with', event.streams[0].getTracks().length, 'track(s)');
                         remoteVideo.srcObject = event.streams[0];
                         streamSet = true;
-                        
+
                         // CRITICAL FIX: Force unmute and set volume BEFORE play
                         remoteVideo.muted = false;
                         remoteVideo.volume = 1.0;
-                        
+
                         // Try to play immediately
                         remoteVideo.play().then(() => {
                             console.log('Playback started');
                             statusEl.textContent = 'Playing';
                             console.log('Audio tracks:', remoteVideo.srcObject.getAudioTracks().length);
                             console.log('Video muted:', remoteVideo.muted, 'Volume:', remoteVideo.volume);
-                            
+
                             // ADDITIONAL FIX: Force audio track to be enabled
                             remoteVideo.srcObject.getAudioTracks().forEach(track => {
                                 track.enabled = true;
@@ -143,7 +143,7 @@
                 console.log('ICE state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
                     statusEl.textContent = 'Streaming';
-                    
+
                     // BACKUP: Ensure audio is playing after connection
                     if (remoteVideo.srcObject) {
                         remoteVideo.muted = false;
@@ -177,6 +177,48 @@
             console.log('Answer created');
 
             sendMessage({ type: 'answer', sdp: answer.sdp });
+
+            // RESTORE FALLBACK: Force check for tracks after a delay (THIS WAS WORKING!)
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Delayed check - Receivers:', receivers.length);
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`Delayed track found ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                        // If track exists but wasn't fired via ontrack, manually trigger it
+                        if (remoteVideo.srcObject === null && receiver.track.readyState === 'live') {
+                            console.warn('Track exists but ontrack not fired! Manually setting...');
+                            
+                            // Collect all tracks
+                            const allTracks = receivers
+                                .filter(r => r.track && r.track.readyState === 'live')
+                                .map(r => r.track);
+                            
+                            const stream = new MediaStream(allTracks);
+                            remoteVideo.srcObject = stream;
+                            remoteVideo.muted = false;
+                            remoteVideo.volume = 1.0;
+                            
+                            remoteVideo.play().then(() => {
+                                statusEl.textContent = 'Playing (manual)';
+                                console.log('Manual playback started');
+                                
+                                // Enable all audio tracks
+                                stream.getAudioTracks().forEach(track => {
+                                    track.enabled = true;
+                                    console.log('Audio track manually enabled:', track.id);
+                                });
+                            }).catch(e => console.error('Manual play error:', e));
+                        } else if (remoteVideo.srcObject !== null) {
+                            // Video is playing, just ensure audio is enabled
+                            remoteVideo.srcObject.getAudioTracks().forEach(track => {
+                                track.enabled = true;
+                                console.log('Audio track re-enabled in fallback:', track.id);
+                            });
+                        }
+                    }
+                });
+            }, 1500); // Reduced from 2000ms to 1.5s for faster display
 
         } catch (e) {
             console.error('Offer handling error:', e);
@@ -212,7 +254,7 @@
         console.log('Video metadata loaded');
         console.log('Dimensions:', remoteVideo.videoWidth, 'x', remoteVideo.videoHeight);
         console.log('Duration:', remoteVideo.duration);
-        
+
         // Force unmute again when metadata loads
         remoteVideo.muted = false;
         remoteVideo.volume = 1.0;
@@ -231,3 +273,4 @@
 </script>
 </body>
 </html>
+
