@@ -1,25 +1,19 @@
+<!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
+    <meta charset="UTF-8">
     <title>DEBUG MODE - WebRTC Receiver</title>
-    <title>WebRTC Screen Mirroring</title>
-<style>
+    <style>
         body { margin: 0; background-color: #111; color: white; font-family: 'Courier New', monospace; }
-        body { margin: 0; background-color: black; color: white; font-family: sans-serif; overflow: hidden; }
-#status {
+        #status {
             position: absolute; top: 20px; left: 20px; font-size: 2em;
             background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; z-index: 100;
-            position: absolute; top: 20px; left: 20px; font-size: 1.5em;
-            background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; z-index: 100;
-}
-#error-display {
+        }
+        #error-display {
             position: absolute; top: 100px; left: 20px; font-size: 1.5em; color: red;
             background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; z-index: 100;
-            position: absolute; top: 80px; left: 20px; font-size: 1.2em; color: red;
-            background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; z-index: 100;
-}
-        video { width: 100vw; height: 100vh; object-fit: contain; }
-</style>
+        }
+    </style>
 </head>
 <body>
 <div id="status">Step 1: Initializing...</div>
@@ -33,65 +27,11 @@
     const remoteVideo = document.getElementById('remoteVideo');
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
-    <div id="status">Initializing Receiver...</div>
-    <div id="error-display"></div>
-    <video id="remoteVideo" autoplay playsinline></video>
-
-    <!-- THE FIX 1: Use the 'latest' SDK version -->
-    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
-    
-    <script>
-        const statusEl = document.getElementById('status');
-        const errorEl = document.getElementById('error-display');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        let peerConnection = null;
-
-        function updateStatus(message) {
-            console.log(message);
-            statusEl.textContent = message;
-        }
-        function displayError(step, error) {
-            const errorMessage = `FAIL @ ${step}: ${error.message}`;
-            console.error(errorMessage, error.stack);
-            errorEl.textContent = errorMessage;
-        }
 
     function updateStatus(message) {
         console.log(message);
         statusEl.textContent = message;
     }
-        try {
-            updateStatus('Getting Cast Context...');
-            const context = cast.framework.CastReceiverContext.getInstance();
-            const castReceiverOptions = new cast.framework.CastReceiverOptions();
-            castReceiverOptions.disableIdleTimeout = true;
-
-            // THE FIX 2: Use the 'READY' event listener instead of .then()
-            context.addEventListener(cast.framework.system.EventType.READY, () => {
-                updateStatus('Ready for Connection...');
-            });
-            
-            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                updateStatus('Sender Disconnected.');
-                if (peerConnection) peerConnection.close();
-            });
-
-            updateStatus('Adding Message Listener...');
-            context.addCustomMessageListener(NAMESPACE, (customEvent) => {
-                try {
-                    let data = customEvent.data;
-                    if (typeof data === 'string') data = JSON.parse(data);
-                    
-                    if (data.type === 'offer') {
-                        handleOffer(data);
-                    } else if (data.type === 'ice_candidate') {
-                        handleIceCandidate(data);
-                    }
-                } catch (e) {
-                    displayError('Processing Message', e);
-                }
-            });
 
     function displayError(step, error) {
         const errorMessage = `FAIL @ ${step}: ${error.message}`;
@@ -99,64 +39,30 @@
         errorEl.textContent = errorMessage;
         document.body.style.backgroundColor = '#500'; // Dark red background on error
     }
-            updateStatus('Starting Cast Context...');
-            context.start(castReceiverOptions);
 
     try {
         updateStatus('Step 2: Getting Cast Context...');
         const context = cast.framework.CastReceiverContext.getInstance();
         const castReceiverOptions = new cast.framework.CastReceiverOptions();
         castReceiverOptions.disableIdleTimeout = true;
-        } catch (e) {
-            displayError('Global Init', e);
-        }
 
         updateStatus('Step 3: Adding Message Listener...');
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-        async function handleOffer(data) {
-try {
+            try {
                 updateStatus('Step 6: Message Received...');
                 let data = customEvent.data;
                 if (typeof data === 'string') {
                     data = JSON.parse(data);
                 }
-                updateStatus('Handling Offer...');
-                peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-
-                peerConnection.ontrack = (event) => {
-                    updateStatus('Track Received!');
-                    if (event.streams && event.streams[0]) {
-                        remoteVideo.srcObject = event.streams[0];
-                        remoteVideo.play().catch(e => displayError('Video Play', e));
-                    }
-                };
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        sendMessage({
-                            type: 'ice_candidate',
-                            candidate: event.candidate.candidate,
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex
-                        });
-                    }
-                };
-                
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                sendMessage({ type: 'answer', sdp: answer.sdp });
-                updateStatus('Answer Sent. Waiting for video...');
 
                 if (data.type === 'offer') {
                     handleOffer(data);
                 } else if (data.type === 'ice_candidate') {
                     handleIceCandidate(data);
                 }
-} catch (e) {
+            } catch (e) {
                 displayError('Processing Message', e);
-                displayError('Handle Offer', e);
-}
+            }
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
@@ -212,24 +118,17 @@ try {
 
         } catch (e) {
             displayError('Handle Offer', e);
-}
+        }
     }
 
     async function handleIceCandidate(data) {
         try {
             if (peerConnection && data.candidate) {
                 await peerConnection.addIceCandidate(new RTCIceCandidate(data));
-        async function handleIceCandidate(data) {
-            try {
-                if (peerConnection && data.candidate) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(data));
-                }
-            } catch (e) {
-                displayError('Handle ICE', e);
-}
+            }
         } catch (e) {
             displayError('Handle ICE', e);
-}
+        }
     }
 
     function sendMessage(messageObject) {
@@ -237,17 +136,8 @@ try {
             context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
         } catch (e) {
             displayError('Send Message', e);
-        function sendMessage(messageObject) {
-            const context = cast.framework.CastReceiverContext.getInstance();
-            try {
-                context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
-
-            } catch (e) {
-                displayError('Send Message', e);
-            }
-}
+        }
     }
 </script>
-    </script>
 </body>
 </html>
