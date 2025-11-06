@@ -29,271 +29,304 @@
     </style>
 </head>
 <body>
-    <div id="status">Connecting...</div>
-    <video id="remoteVideo" autoplay playsinline muted="false" volume="1.0"></video>
-    
-    <!-- AUDIO FIX: Add a separate, invisible audio element -->
-    <audio id="remoteAudio" autoplay></audio>
+<div id="status">Connecting...</div>
+<video id="remoteVideo" autoplay playsinline muted="false" volume="1.0"></video>
 
-    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <script>
-        const statusEl = document.getElementById('status');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const remoteAudio = document.getElementById('remoteAudio'); // AUDIO FIX: Get reference
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        let peerConnection = null;
-        let context = null;
+<!-- AUDIO FIX: Add a separate, invisible audio element as a fallback -->
+<audio id="remoteAudio" autoplay></audio>
 
-        remoteVideo.muted = false;
-        remoteVideo.volume = 1.0;
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+    const statusEl = document.getElementById('status');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const remoteAudio = document.getElementById('remoteAudio'); // AUDIO FIX: Get a reference to the new element
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+    let peerConnection = null;
+    let context = null;
 
-        try {
-            context = cast.framework.CastReceiverContext.getInstance();
-            const castReceiverOptions = new cast.framework.CastReceiverOptions();
-            castReceiverOptions.disableIdleTimeout = true;
-            castReceiverOptions.maxInactivity = 3600;
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
 
-            context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-                try {
-                    let data = customEvent.data;
-                    if (typeof data === 'string') {
-                        data = JSON.parse(data);
-                    }
+    try {
+        context = cast.framework.CastReceiverContext.getInstance();
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600;
 
-                    if (data.type === 'offer') {
-                        handleOffer(data);
-                    } else if (data.type === 'ice_candidate') {
-                        handleIceCandidate(data);
-                    }
-                } catch (e) {
-                    console.error('Message processing error:', e);
-                }
-            });
-
-            context.addEventListener(cast.framework.system.EventType.READY, () => {
-                statusEl.textContent = 'Ready';
-                console.log('Receiver ready');
-                remoteVideo.muted = false;
-                remoteVideo.volume = 1.0;
-            });
-
-            context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-                statusEl.textContent = 'Connected - Waiting for stream...';
-                console.log('Sender connected:', event.senderId);
-                remoteVideo.muted = false;
-                remoteVideo.volume = 1.0;
-            });
-
-            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                statusEl.textContent = 'Disconnected';
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
-                }
-                remoteVideo.srcObject = null;
-                remoteAudio.srcObject = null; // AUDIO FIX: Clear audio source
-            });
-
-            context.start(castReceiverOptions);
-
-        } catch (e) {
-            console.error('Init error:', e);
-            statusEl.textContent = 'Error: ' + e.message;
-        }
-
-        async function handleOffer(data) {
+        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
-                console.log('Handling offer');
-                const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-                peerConnection = new RTCPeerConnection(configuration);
-
-                let streamSet = false;
-
-                // Handle tracks as they arrive
-                peerConnection.ontrack = (event) => {
-                    console.log('Track received:', event.track.kind);
-                    
-                    if (event.track.kind === 'audio') {
-                        console.log('✓✓✓ AUDIO TRACK RECEIVED!');
-                        // AUDIO FIX: Attach the stream to the separate audio element
-                        if (remoteAudio.srcObject !== event.streams[0]) {
-                            remoteAudio.srcObject = event.streams[0];
-                            console.log('Attached stream to separate audio element.');
-                        }
-                    }
-
-                    if (event.streams && event.streams[0]) {
-                        if (!streamSet) {
-                            console.log('Setting stream on video element with', event.streams[0].getTracks().length, 'track(s)');
-                            remoteVideo.srcObject = event.streams[0];
-                            streamSet = true;
-
-                            remoteVideo.muted = false;
-                            remoteVideo.volume = 1.0;
-
-                            remoteVideo.play().then(() => {
-                                console.log('Video Playback started');
-                                statusEl.textContent = 'Playing';
-                                
-                                // AUDIO FIX: Try to play the audio element as well.
-                                remoteAudio.play().catch(e => console.error('Audio element play failed:', e));
-                                
-                                // Your triple check logic
-                                remoteVideo.muted = false;
-                                remoteVideo.volume = 1.0;
-                                remoteVideo.srcObject.getAudioTracks().forEach(track => {
-                                    track.enabled = true;
-                                });
-                            }).catch(e => console.error('Video Play failed:', e));
-                        }
-                    }
-                };
-
-                // The rest of your proven, working handleOffer function...
-                peerConnection.oniceconnectionstatechange = () => { /* ... same as your working version ... */ };
-                peerConnection.onicecandidate = (event) => { /* ... same as your working version ... */ };
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                sendMessage({ type: 'answer', sdp: answer.sdp });
-
-            // RESTORE FALLBACK: Force check for tracks after a delay (THIS WAS WORKING!)
-            setTimeout(() => {
-                const receivers = peerConnection.getReceivers();
-                console.log('Delayed check - Receivers:', receivers.length);
-                receivers.forEach((receiver, index) => {
-                    if (receiver.track) {
-                        console.log(`Delayed track found ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
-                        
-                        // Enable all tracks
-                        receiver.track.enabled = true;
-                        
-                        // If track exists but wasn't fired via ontrack, manually trigger it
-                        if (remoteVideo.srcObject === null && receiver.track.readyState === 'live') {
-                            console.warn('Track exists but ontrack not fired! Manually setting...');
-
-                            // Collect all tracks
-                            const allTracks = receivers
-                                .filter(r => r.track && r.track.readyState === 'live')
-                                .map(r => r.track);
-
-                            // Enable all tracks
-                            allTracks.forEach(t => t.enabled = true);
-
-                            const stream = new MediaStream(allTracks);
-                            remoteVideo.srcObject = stream;
-                            remoteVideo.muted = false;
-                            remoteVideo.volume = 1.0;
-
-                            remoteVideo.play().then(() => {
-                                statusEl.textContent = 'Playing (manual)';
-                                console.log('Manual playback started');
-
-                                // FORCE unmute again
-                                remoteVideo.muted = false;
-                                remoteVideo.volume = 1.0;
-
-                                // Enable all audio tracks
-                                stream.getAudioTracks().forEach(track => {
-                                    track.enabled = true;
-                                    console.log('Audio track manually enabled:', track.id);
-                                });
-                            }).catch(e => console.error('Manual play error:', e));
-                        } else if (remoteVideo.srcObject !== null) {
-                            // Video is playing, just ensure audio is enabled
-                            remoteVideo.muted = false;
-                            remoteVideo.volume = 1.0;
-                            remoteVideo.srcObject.getAudioTracks().forEach(track => {
-                                track.enabled = true;
-                                console.log('Audio track re-enabled in fallback:', track.id);
-                            });
-                        }
-                    }
-                });
-            }, 1500);
-
-        } catch (e) {
-            console.error('Offer handling error:', e);
-            statusEl.textContent = 'Error: ' + e.message;
-        }
-    }
-
-    async function handleIceCandidate(data) {
-        try {
-            if (peerConnection && data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate({
-                    candidate: data.candidate,
-                    sdpMid: data.sdpMid,
-                    sdpMLineIndex: data.sdpMLineIndex
-                }));
+                let data = customEvent.data;
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
+                }
+                if (data.type === 'offer') {
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    handleIceCandidate(data);
+                }
+            } catch (e) {
+                console.error('Message processing error:', e);
             }
-        } catch (e) {
-            console.error('ICE candidate error:', e);
-        }
-    }
+        });
 
-    function sendMessage(messageObject) {
-        try {
-            const messageStr = JSON.stringify(messageObject);
-            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-        } catch (e) {
-            console.error('Send message error:', e);
-        }
-    }
-
-    // FIX: Add user interaction handler for audio (some browsers require this)
-    remoteVideo.addEventListener('loadedmetadata', () => {
-        console.log('Video metadata loaded');
-        console.log('Dimensions:', remoteVideo.videoWidth, 'x', remoteVideo.videoHeight);
-        console.log('Duration:', remoteVideo.duration);
-
-        // Force unmute again when metadata loads
-        remoteVideo.muted = false;
-        remoteVideo.volume = 1.0;
-    });
-
-    remoteVideo.addEventListener('canplay', () => {
-        console.log('Video can play');
-        // Ensure audio is enabled
-        if (remoteVideo.srcObject) {
-            // Force video element to be unmuted
+        context.addEventListener(cast.framework.system.EventType.READY, () => {
+            statusEl.textContent = 'Ready';
+            console.log('Receiver ready');
             remoteVideo.muted = false;
             remoteVideo.volume = 1.0;
-            
-            remoteVideo.srcObject.getAudioTracks().forEach(track => {
-                track.enabled = true;
-                console.log('Audio track on canplay:', {
-                    id: track.id, 
-                    enabled: track.enabled, 
-                    muted: track.muted,
-                    readyState: track.readyState,
-                    label: track.label
-                });
-            });
-            
-            // Log video element state
-            console.log('Video element state on canplay:', {
-                muted: remoteVideo.muted,
-                volume: remoteVideo.volume,
-                paused: remoteVideo.paused
-            });
-        }
-    });
+        });
 
-    // ADDITIONAL FIX: Add playing event listener
-    remoteVideo.addEventListener('playing', () => {
-        console.log('Video is now playing!');
-        // One more aggressive unmute when playback actually starts
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
+            statusEl.textContent = 'Connected - Waiting for stream...';
+            console.log('Sender connected:', event.senderId);
+            remoteVideo.muted = false;
+            remoteVideo.volume = 1.0;
+        });
+
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            statusEl.textContent = 'Disconnected';
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            remoteAudio.srcObject = null; // AUDIO FIX: Clear the audio source too
+        });
+
+        context.start(castReceiverOptions);
+
+    } catch (e) {
+        console.error('Init error:', e);
+        statusEl.textContent = 'Error: ' + e.message;
+    }
+
+    async function handleOffer(data) {
+        try {
+            console.log('Handling offer');
+            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            peerConnection = new RTCPeerConnection(configuration);
+
+            let streamSet = false;
+
+            // Handle tracks as they arrive
+            peerConnection.ontrack = (event) => {
+                console.log('Track received:', event.track.kind);
+                
+                if (event.track.kind === 'audio') {
+                    // AUDIO FIX: Attach the stream to the separate audio element
+                    if (remoteAudio.srcObject !== event.streams[0]) {
+                        remoteAudio.srcObject = event.streams[0];
+                        console.log('Attached stream to separate audio element.');
+                    }
+                }
+
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting stream on video element...');
+                        remoteVideo.srcObject = event.streams[0];
+                        streamSet = true;
+
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+                        
+                        remoteVideo.play().then(() => {
+                            console.log('Playback started');
+                            statusEl.textContent = 'Playing';
+                            
+                            // AUDIO FIX: Also try to play the separate audio element
+                            remoteAudio.play().catch(e => console.error('Audio element play failed:', e));
+                            
+                            // Your original robust checks
+                            remoteVideo.muted = false;
+                            remoteVideo.volume = 1.0;
+                            remoteVideo.srcObject.getAudioTracks().forEach(track => { track.enabled = true; });
+                        }).catch(e => console.error('Play failed:', e));
+                    }
+                }
+            };
+
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE state:', peerConnection.iceConnectionState);
+            if (peerConnection.iceConnectionState === 'connected') {
+                statusEl.textContent = 'Streaming';
+
+                // BACKUP: Ensure audio is playing after connection
+                if (remoteVideo.srcObject) {
+                    remoteVideo.muted = false;
+                    remoteVideo.volume = 1.0;
+                    remoteVideo.srcObject.getAudioTracks().forEach(track => {
+                        track.enabled = true;
+                        console.log('Audio track state after ICE connected:', {
+                            id: track.id,
+                            enabled: track.enabled,
+                            muted: track.muted,
+                            readyState: track.readyState
+                        });
+                    });
+                }
+            }
+        };
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                sendMessage({
+                    type: 'ice_candidate',
+                    candidate: event.candidate.candidate,
+                    sdpMid: event.candidate.sdpMid,
+                    sdpMLineIndex: event.candidate.sdpMLineIndex
+                });
+            }
+        };
+
+        await peerConnection.setRemoteDescription(new RTCSessionDescription({
+            type: 'offer',
+            sdp: data.sdp
+        }));
+        console.log('Remote description set');
+
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        console.log('Answer created');
+
+        sendMessage({ type: 'answer', sdp: answer.sdp });
+
+        // RESTORE FALLBACK: Force check for tracks after a delay (THIS WAS WORKING!)
+        setTimeout(() => {
+            const receivers = peerConnection.getReceivers();
+            console.log('Delayed check - Receivers:', receivers.length);
+            receivers.forEach((receiver, index) => {
+                if (receiver.track) {
+                    console.log(`Delayed track found ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+
+                    // Enable all tracks
+                    receiver.track.enabled = true;
+
+                    // If track exists but wasn't fired via ontrack, manually trigger it
+                    if (remoteVideo.srcObject === null && receiver.track.readyState === 'live') {
+                        console.warn('Track exists but ontrack not fired! Manually setting...');
+
+                        // Collect all tracks
+                        const allTracks = receivers
+                            .filter(r => r.track && r.track.readyState === 'live')
+                            .map(r => r.track);
+
+                        // Enable all tracks
+                        allTracks.forEach(t => t.enabled = true);
+
+                        const stream = new MediaStream(allTracks);
+                        remoteVideo.srcObject = stream;
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+
+                        remoteVideo.play().then(() => {
+                            statusEl.textContent = 'Playing (manual)';
+                            console.log('Manual playback started');
+
+                            // FORCE unmute again
+                            remoteVideo.muted = false;
+                            remoteVideo.volume = 1.0;
+
+                            // Enable all audio tracks
+                            stream.getAudioTracks().forEach(track => {
+                                track.enabled = true;
+                                console.log('Audio track manually enabled:', track.id);
+                            });
+                        }).catch(e => console.error('Manual play error:', e));
+                    } else if (remoteVideo.srcObject !== null) {
+                        // Video is playing, just ensure audio is enabled
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+                        remoteVideo.srcObject.getAudioTracks().forEach(track => {
+                            track.enabled = true;
+                            console.log('Audio track re-enabled in fallback:', track.id);
+                        });
+                    }
+                }
+            });
+        }, 1500);
+
+    } catch (e) {
+        console.error('Offer handling error:', e);
+        statusEl.textContent = 'Error: ' + e.message;
+    }
+}
+
+async function handleIceCandidate(data) {
+    try {
+        if (peerConnection && data.candidate) {
+            await peerConnection.addIceCandidate(new RTCIceCandidate({
+                candidate: data.candidate,
+                sdpMid: data.sdpMid,
+                sdpMLineIndex: data.sdpMLineIndex
+            }));
+        }
+    } catch (e) {
+        console.error('ICE candidate error:', e);
+    }
+}
+
+function sendMessage(messageObject) {
+    try {
+        const messageStr = JSON.stringify(messageObject);
+        context.sendCustomMessage(NAMESPACE, undefined, messageStr);
+    } catch (e) {
+        console.error('Send message error:', e);
+    }
+}
+
+// FIX: Add user interaction handler for audio (some browsers require this)
+remoteVideo.addEventListener('loadedmetadata', () => {
+    console.log('Video metadata loaded');
+    console.log('Dimensions:', remoteVideo.videoWidth, 'x', remoteVideo.videoHeight);
+    console.log('Duration:', remoteVideo.duration);
+
+    // Force unmute again when metadata loads
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
+});
+
+remoteVideo.addEventListener('canplay', () => {
+    console.log('Video can play');
+    // Ensure audio is enabled
+    if (remoteVideo.srcObject) {
+        // Force video element to be unmuted
         remoteVideo.muted = false;
         remoteVideo.volume = 1.0;
-        
-        if (remoteVideo.srcObject) {
-            remoteVideo.srcObject.getAudioTracks().forEach(track => {
-                track.enabled = true;
-                console.log('Audio track confirmed enabled on playing:', track.id);
+
+        remoteVideo.srcObject.getAudioTracks().forEach(track => {
+            track.enabled = true;
+            console.log('Audio track on canplay:', {
+                id: track.id,
+                enabled: track.enabled,
+                muted: track.muted,
+                readyState: track.readyState,
+                label: track.label
             });
-        }
-    });
+        });
+
+        // Log video element state
+        console.log('Video element state on canplay:', {
+            muted: remoteVideo.muted,
+            volume: remoteVideo.volume,
+            paused: remoteVideo.paused
+        });
+    }
+});
+
+// ADDITIONAL FIX: Add playing event listener
+remoteVideo.addEventListener('playing', () => {
+    console.log('Video is now playing!');
+    // One more aggressive unmute when playback actually starts
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
+
+    if (remoteVideo.srcObject) {
+        remoteVideo.srcObject.getAudioTracks().forEach(track => {
+            track.enabled = true;
+            console.log('Audio track confirmed enabled on playing:', track.id);
+        });
+    }
+});
 </script>
 </body>
 </html>
