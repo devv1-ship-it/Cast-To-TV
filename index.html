@@ -67,6 +67,12 @@
         let lastTime = Date.now();
         let lastFrameTime = Date.now();
 
+        // Audio playback
+        let audioContext = null;
+        let audioBufferQueue = [];
+        let isPlayingAudio = false;
+        let nextAudioTime = 0;
+
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
 
         console.log('=== Cast Receiver Initializing ===');
@@ -77,14 +83,24 @@
         castReceiverOptions.disableIdleTimeout = true;
         castReceiverOptions.maxInactivity = 3600;
 
+        // Initialize Web Audio API
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                console.log('Audio context initialized. Sample rate:', audioContext.sampleRate);
+                statusEl.textContent += ' (Audio Ready)';
+            }
+        }
+
         // Handle frame messages from Android app
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
                 const data = customEvent.data;
-                console.log('Received message type:', data.type);
 
                 if (data.type === 'frame') {
                     handleFrame(data);
+                } else if (data.type === 'audio') {
+                    handleAudio(data);
                 } else {
                     console.log('Unknown message type:', data.type);
                 }
@@ -115,6 +131,60 @@
             }
         }
 
+        function handleAudio(data) {
+            try {
+                if (!audioContext) {
+                    initAudio();
+                }
+
+                // Decode base64 audio data
+                const base64Audio = data.data;
+                const binaryString = atob(base64Audio);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                // Convert to Float32Array for Web Audio API
+                const sampleRate = data.sampleRate || 44100;
+                const channels = data.channels || 2;
+                const pcmData = new Int16Array(bytes.buffer);
+
+                // Create audio buffer
+                const audioBuffer = audioContext.createBuffer(channels, pcmData.length / channels, sampleRate);
+
+                // Convert PCM16 to Float32 and split channels
+                for (let channel = 0; channel < channels; channel++) {
+                    const channelData = audioBuffer.getChannelData(channel);
+                    for (let i = 0; i < channelData.length; i++) {
+                        channelData[i] = pcmData[i * channels + channel] / 32768.0;
+                    }
+                }
+
+                // Play audio buffer
+                playAudioBuffer(audioBuffer);
+
+            } catch (error) {
+                console.error('Error processing audio:', error);
+            }
+        }
+
+        function playAudioBuffer(buffer) {
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+
+            const currentTime = audioContext.currentTime;
+
+            // Schedule audio playback
+            if (nextAudioTime < currentTime) {
+                nextAudioTime = currentTime;
+            }
+
+            source.start(nextAudioTime);
+            nextAudioTime += buffer.duration;
+        }
+
         // FPS counter
         function startFPSCounter() {
             setInterval(() => {
@@ -142,6 +212,7 @@
             function(event) {
                 console.log('Sender connected:', event.senderId);
                 statusEl.textContent = 'Device Connected - Waiting for stream...';
+                initAudio(); // Initialize audio when sender connects
                 startFPSCounter();
             }
         );
@@ -154,6 +225,12 @@
                 fpsEl.textContent = 'FPS: 0';
                 screenImage.src = '';
                 frameCount = 0;
+
+                // Stop audio
+                if (audioContext) {
+                    audioContext.close();
+                    audioContext = null;
+                }
             }
         );
 
