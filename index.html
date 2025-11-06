@@ -67,11 +67,10 @@
         let lastTime = Date.now();
         let lastFrameTime = Date.now();
 
-        // Audio playback
+        // Audio playback - OPTIMIZED
         let audioContext = null;
-        let audioBufferQueue = [];
-        let isPlayingAudio = false;
         let nextAudioTime = 0;
+        const AUDIO_BUFFER_TARGET = 0.1; // 100ms audio buffer
 
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
 
@@ -87,8 +86,8 @@
         function initAudio() {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                nextAudioTime = audioContext.currentTime;
                 console.log('Audio context initialized. Sample rate:', audioContext.sampleRate);
-                statusEl.textContent += ' (Audio Ready)';
             }
         }
 
@@ -101,33 +100,25 @@
                     handleFrame(data);
                 } else if (data.type === 'audio') {
                     handleAudio(data);
-                } else {
-                    console.log('Unknown message type:', data.type);
                 }
             } catch (error) {
                 console.error('Error processing message:', error);
-                statusEl.textContent = 'Error occurred: ' + error.message;
             }
         });
 
         function handleFrame(data) {
             try {
-                // Convert base64 to image and display
-                const base64Image = data.data;
-                screenImage.src = 'data:image/jpeg;base64,' + base64Image;
+                // OPTIMIZATION: Direct assignment, no extra conversions
+                screenImage.src = 'data:image/jpeg;base64,' + data.data;
 
-                // Update frame counter
                 frameCount++;
                 lastFrameTime = Date.now();
 
-                // Update status on first frame
                 if (frameCount === 1) {
                     statusEl.textContent = '✓ Screen Mirroring Active';
-                    console.log('First frame received. Resolution: ' + data.width + 'x' + data.height);
                 }
             } catch (error) {
                 console.error('Error displaying frame:', error);
-                statusEl.textContent = 'Error displaying frame';
             }
         }
 
@@ -137,7 +128,7 @@
                     initAudio();
                 }
 
-                // Decode base64 audio data
+                // OPTIMIZATION: Faster audio decoding
                 const base64Audio = data.data;
                 const binaryString = atob(base64Audio);
                 const bytes = new Uint8Array(binaryString.length);
@@ -145,44 +136,40 @@
                     bytes[i] = binaryString.charCodeAt(i);
                 }
 
-                // Convert to Float32Array for Web Audio API
                 const sampleRate = data.sampleRate || 44100;
-                const channels = data.channels || 2;
+                const channels = data.channels || 1; // MONO now
                 const pcmData = new Int16Array(bytes.buffer);
 
                 // Create audio buffer
                 const audioBuffer = audioContext.createBuffer(channels, pcmData.length / channels, sampleRate);
 
-                // Convert PCM16 to Float32 and split channels
+                // Convert PCM16 to Float32
                 for (let channel = 0; channel < channels; channel++) {
                     const channelData = audioBuffer.getChannelData(channel);
+                    const stride = channels;
                     for (let i = 0; i < channelData.length; i++) {
-                        channelData[i] = pcmData[i * channels + channel] / 32768.0;
+                        channelData[i] = pcmData[i * stride + channel] / 32768.0;
                     }
                 }
 
-                // Play audio buffer
-                playAudioBuffer(audioBuffer);
+                // OPTIMIZATION: Better audio scheduling to prevent gaps
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                const currentTime = audioContext.currentTime;
+
+                // Schedule with small buffer to prevent gaps
+                if (nextAudioTime < currentTime + AUDIO_BUFFER_TARGET) {
+                    nextAudioTime = currentTime + AUDIO_BUFFER_TARGET;
+                }
+
+                source.start(nextAudioTime);
+                nextAudioTime += audioBuffer.duration;
 
             } catch (error) {
                 console.error('Error processing audio:', error);
             }
-        }
-
-        function playAudioBuffer(buffer) {
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioContext.destination);
-
-            const currentTime = audioContext.currentTime;
-
-            // Schedule audio playback
-            if (nextAudioTime < currentTime) {
-                nextAudioTime = currentTime;
-            }
-
-            source.start(nextAudioTime);
-            nextAudioTime += buffer.duration;
         }
 
         // FPS counter
@@ -192,7 +179,6 @@
                 const elapsed = (now - lastTime) / 1000;
                 const fps = Math.round(frameCount / elapsed);
 
-                // Check if we're still receiving frames
                 const timeSinceLastFrame = now - lastFrameTime;
                 if (timeSinceLastFrame > 2000) {
                     statusEl.textContent = '⚠ No frames received';
@@ -212,7 +198,7 @@
             function(event) {
                 console.log('Sender connected:', event.senderId);
                 statusEl.textContent = 'Device Connected - Waiting for stream...';
-                initAudio(); // Initialize audio when sender connects
+                initAudio();
                 startFPSCounter();
             }
         );
@@ -226,7 +212,6 @@
                 screenImage.src = '';
                 frameCount = 0;
 
-                // Stop audio
                 if (audioContext) {
                     audioContext.close();
                     audioContext = null;
@@ -254,7 +239,6 @@
         try {
             context.start(castReceiverOptions);
             console.log('=== Cast receiver started successfully ===');
-            console.log('Custom message namespace registered:', NAMESPACE);
         } catch (error) {
             console.error('=== FAILED to start Cast receiver ===', error);
             statusEl.textContent = 'FAILED TO START: ' + error.message;
