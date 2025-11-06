@@ -30,7 +30,8 @@
 </head>
 <body>
 <div id="status">Connecting...</div>
-<video id="remoteVideo" autoplay playsinline></video>
+<!-- CRITICAL: Ensure video is NOT muted initially -->
+<video id="remoteVideo" autoplay playsinline muted="false" volume="1.0"></video>
 
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script>
@@ -39,6 +40,10 @@
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
     let context = null;
+
+    // CRITICAL: Ensure video element is unmuted from the start
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
 
     try {
         context = cast.framework.CastReceiverContext.getInstance();
@@ -66,11 +71,17 @@
         context.addEventListener(cast.framework.system.EventType.READY, () => {
             statusEl.textContent = 'Ready';
             console.log('Receiver ready');
+            // Ensure unmuted on ready
+            remoteVideo.muted = false;
+            remoteVideo.volume = 1.0;
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
             statusEl.textContent = 'Connected - Waiting for stream...';
             console.log('Sender connected:', event.senderId);
+            // Ensure unmuted when sender connects
+            remoteVideo.muted = false;
+            remoteVideo.volume = 1.0;
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
@@ -109,7 +120,12 @@
                 console.log('Track received:', event.track.kind);
 
                 if (event.track.kind === 'video') videoReady = true;
-                if (event.track.kind === 'audio') audioReady = true;
+                if (event.track.kind === 'audio') {
+                    audioReady = true;
+                    // IMMEDIATELY enable audio track when received
+                    event.track.enabled = true;
+                    console.log('Audio track ENABLED immediately:', event.track.id);
+                }
 
                 if (event.streams && event.streams[0]) {
                     // Set stream immediately on first track
@@ -122,17 +138,28 @@
                         remoteVideo.muted = false;
                         remoteVideo.volume = 1.0;
 
+                        // ENABLE ALL TRACKS IMMEDIATELY
+                        event.streams[0].getTracks().forEach(track => {
+                            track.enabled = true;
+                            console.log(`Track ${track.kind} enabled:`, track.id);
+                        });
+
                         // Try to play immediately
                         remoteVideo.play().then(() => {
                             console.log('Playback started');
                             statusEl.textContent = 'Playing';
+                            
+                            // TRIPLE CHECK audio is unmuted
+                            remoteVideo.muted = false;
+                            remoteVideo.volume = 1.0;
+                            
                             console.log('Audio tracks:', remoteVideo.srcObject.getAudioTracks().length);
                             console.log('Video muted:', remoteVideo.muted, 'Volume:', remoteVideo.volume);
 
                             // ADDITIONAL FIX: Force audio track to be enabled
                             remoteVideo.srcObject.getAudioTracks().forEach(track => {
                                 track.enabled = true;
-                                console.log('Audio track enabled:', track.id, track.readyState);
+                                console.log('Audio track enabled:', track.id, track.readyState, 'muted:', track.muted);
                             });
                         }).catch(e => console.error('Play failed:', e));
                     }
@@ -150,6 +177,12 @@
                         remoteVideo.volume = 1.0;
                         remoteVideo.srcObject.getAudioTracks().forEach(track => {
                             track.enabled = true;
+                            console.log('Audio track state after ICE connected:', {
+                                id: track.id,
+                                enabled: track.enabled,
+                                muted: track.muted,
+                                readyState: track.readyState
+                            });
                         });
                     }
                 }
@@ -185,24 +218,35 @@
                 receivers.forEach((receiver, index) => {
                     if (receiver.track) {
                         console.log(`Delayed track found ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                        
+                        // Enable all tracks
+                        receiver.track.enabled = true;
+                        
                         // If track exists but wasn't fired via ontrack, manually trigger it
                         if (remoteVideo.srcObject === null && receiver.track.readyState === 'live') {
                             console.warn('Track exists but ontrack not fired! Manually setting...');
-                            
+
                             // Collect all tracks
                             const allTracks = receivers
                                 .filter(r => r.track && r.track.readyState === 'live')
                                 .map(r => r.track);
-                            
+
+                            // Enable all tracks
+                            allTracks.forEach(t => t.enabled = true);
+
                             const stream = new MediaStream(allTracks);
                             remoteVideo.srcObject = stream;
                             remoteVideo.muted = false;
                             remoteVideo.volume = 1.0;
-                            
+
                             remoteVideo.play().then(() => {
                                 statusEl.textContent = 'Playing (manual)';
                                 console.log('Manual playback started');
-                                
+
+                                // FORCE unmute again
+                                remoteVideo.muted = false;
+                                remoteVideo.volume = 1.0;
+
                                 // Enable all audio tracks
                                 stream.getAudioTracks().forEach(track => {
                                     track.enabled = true;
@@ -211,6 +255,8 @@
                             }).catch(e => console.error('Manual play error:', e));
                         } else if (remoteVideo.srcObject !== null) {
                             // Video is playing, just ensure audio is enabled
+                            remoteVideo.muted = false;
+                            remoteVideo.volume = 1.0;
                             remoteVideo.srcObject.getAudioTracks().forEach(track => {
                                 track.enabled = true;
                                 console.log('Audio track re-enabled in fallback:', track.id);
@@ -218,7 +264,7 @@
                         }
                     }
                 });
-            }, 1500); // Reduced from 2000ms to 1.5s for faster display
+            }, 1500);
 
         } catch (e) {
             console.error('Offer handling error:', e);
@@ -264,13 +310,44 @@
         console.log('Video can play');
         // Ensure audio is enabled
         if (remoteVideo.srcObject) {
+            // Force video element to be unmuted
+            remoteVideo.muted = false;
+            remoteVideo.volume = 1.0;
+            
             remoteVideo.srcObject.getAudioTracks().forEach(track => {
-                console.log('Audio track on canplay:', track.id, 'enabled:', track.enabled, 'muted:', track.muted);
                 track.enabled = true;
+                console.log('Audio track on canplay:', {
+                    id: track.id, 
+                    enabled: track.enabled, 
+                    muted: track.muted,
+                    readyState: track.readyState,
+                    label: track.label
+                });
+            });
+            
+            // Log video element state
+            console.log('Video element state on canplay:', {
+                muted: remoteVideo.muted,
+                volume: remoteVideo.volume,
+                paused: remoteVideo.paused
+            });
+        }
+    });
+
+    // ADDITIONAL FIX: Add playing event listener
+    remoteVideo.addEventListener('playing', () => {
+        console.log('Video is now playing!');
+        // One more aggressive unmute when playback actually starts
+        remoteVideo.muted = false;
+        remoteVideo.volume = 1.0;
+        
+        if (remoteVideo.srcObject) {
+            remoteVideo.srcObject.getAudioTracks().forEach(track => {
+                track.enabled = true;
+                console.log('Audio track confirmed enabled on playing:', track.id);
             });
         }
     });
 </script>
 </body>
 </html>
-
