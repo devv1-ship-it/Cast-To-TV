@@ -2,45 +2,290 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>MJPEG Screen Mirroring</title>
+    <title>WebRTC Screen Mirroring</title>
     <style>
-        body { margin: 0; background-color: black; }
-        img { width: 100vw; height: 100vh; object-fit: contain; }
+        body {
+            margin: 0;
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #remoteVideo {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            background: #000;
+        }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 1.2em;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
-    <img id="stream-image" />
+<div id="status">Connecting...</div>
+<video id="remoteVideo" autoplay playsinline></video>
 
-    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
-    <script>
-        window.__onGCastApiAvailable = function(isAvailable) {
-            if (isAvailable) initializeApp();
-        };
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+    const statusEl = document.getElementById('status');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+    let peerConnection = null;
+    let context = null;
 
-        function initializeApp() {
-            const streamImage = document.getElementById('stream-image');
-            const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-            
-            const context = cast.framework.CastReceiverContext.getInstance();
-            const castReceiverOptions = new cast.framework.CastReceiverOptions();
-            castReceiverOptions.disableIdleTimeout = true;
+    // Audio playback components
+    let audioContext = null;
+    let audioQueue = [];
+    let isPlayingAudio = false;
+    let nextPlayTime = 0;
 
-            context.addCustomMessageListener(NAMESPACE, (customEvent) => {
-                try {
-                    const message = JSON.parse(customEvent.data);
-                    if (message.type === 'frame' && message.data) {
-                        // This is the entire logic. Update the image source.
-                        streamImage.src = `data:image/jpeg;base64,${message.data}`;
-                    }
-                } catch (e) { /* Ignore parsing errors */ }
+    try {
+        context = cast.framework.CastReceiverContext.getInstance();
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600;
+
+        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+            try {
+                let data = customEvent.data;
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
+                }
+
+                if (data.type === 'offer') {
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    handleIceCandidate(data);
+                } else if (data.type === 'audio') {
+                    handleAudioData(data);
+                }
+            } catch (e) {
+                console.error('Message processing error:', e);
+            }
+        });
+
+        context.addEventListener(cast.framework.system.EventType.READY, () => {
+            statusEl.textContent = 'Ready';
+            console.log('Receiver ready');
+            initializeAudioContext();
+        });
+
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
+            statusEl.textContent = 'Connected - Waiting for stream...';
+            console.log('Sender connected:', event.senderId);
+        });
+
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            statusEl.textContent = 'Disconnected';
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            stopAudioPlayback();
+        });
+
+        context.start(castReceiverOptions);
+
+    } catch (e) {
+        console.error('Init error:', e);
+        statusEl.textContent = 'Error: ' + e.message;
+    }
+
+    function initializeAudioContext() {
+        try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 48000,
+                latencyHint: 'interactive'
             });
-            
-            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                window.location.reload();
-            });
-
-            context.start(castReceiverOptions);
+            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
+        } catch (e) {
+            console.error('Failed to initialize AudioContext:', e);
         }
-    </script>
+    }
+
+    function handleAudioData(data) {
+        if (!audioContext) {
+            console.warn('AudioContext not initialized');
+            return;
+        }
+
+        try {
+            // Decode base64 audio data
+            const binaryString = atob(data.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Convert PCM bytes to Float32Array
+            const int16Array = new Int16Array(bytes.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
+            }
+
+            // Split stereo data into left and right channels
+            const channels = data.channels || 2;
+            const samplesPerChannel = float32Array.length / channels;
+
+            // Create AudioBuffer
+            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
+
+            if (channels === 2) {
+                const leftChannel = audioBuffer.getChannelData(0);
+                const rightChannel = audioBuffer.getChannelData(1);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    leftChannel[i] = float32Array[i * 2];
+                    rightChannel[i] = float32Array[i * 2 + 1];
+                }
+            } else {
+                const channelData = audioBuffer.getChannelData(0);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    channelData[i] = float32Array[i];
+                }
+            }
+
+            playAudioBuffer(audioBuffer);
+        } catch (e) {
+            console.error('Error processing audio data:', e);
+        }
+    }
+
+    function playAudioBuffer(audioBuffer) {
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+
+        // Schedule playback
+        const currentTime = audioContext.currentTime;
+        if (nextPlayTime < currentTime) {
+            nextPlayTime = currentTime;
+        }
+
+        source.start(nextPlayTime);
+        nextPlayTime += audioBuffer.duration;
+    }
+
+    function stopAudioPlayback() {
+        audioQueue = [];
+        isPlayingAudio = false;
+        nextPlayTime = 0;
+        if (audioContext) {
+            try {
+                audioContext.close();
+                audioContext = null;
+            } catch (e) {
+                console.error('Error closing AudioContext:', e);
+            }
+        }
+    }
+
+    async function handleOffer(data) {
+        try {
+            console.log('Handling offer');
+
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            };
+            peerConnection = new RTCPeerConnection(configuration);
+
+            let streamSet = false;
+
+            peerConnection.ontrack = (event) => {
+                console.log('Track received:', event.track.kind);
+
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting video stream');
+                        remoteVideo.srcObject = event.streams[0];
+                        streamSet = true;
+
+                        remoteVideo.play().then(() => {
+                            console.log('Video playback started');
+                            statusEl.textContent = 'Streaming (Video + System Audio)';
+                        }).catch(e => console.error('Play failed:', e));
+                    }
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + System Audio)';
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendMessage({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    });
+                }
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+            console.log('Remote description set');
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            console.log('Answer created');
+
+            sendMessage({ type: 'answer', sdp: answer.sdp });
+
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Receivers:', receivers.length);
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`Track ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                    }
+                });
+            }, 1500);
+
+        } catch (e) {
+            console.error('Offer handling error:', e);
+            statusEl.textContent = 'Error: ' + e.message;
+        }
+    }
+
+    async function handleIceCandidate(data) {
+        try {
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate({
+                    candidate: data.candidate,
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex
+                }));
+            }
+        } catch (e) {
+            console.error('ICE candidate error:', e);
+        }
+    }
+
+    function sendMessage(messageObject) {
+        try {
+            const messageStr = JSON.stringify(messageObject);
+            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
+        } catch (e) {
+            console.error('Send message error:', e);
+        }
+    }
+</script>
 </body>
 </html>
