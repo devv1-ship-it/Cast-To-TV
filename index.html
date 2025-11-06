@@ -17,11 +17,11 @@
     </style>
 </head>
 <body>
-    <div id="status">Initializing Receiver...</div>
+    <div id="status">Loading Cast SDK...</div>
     <div id="error-display"></div>
     <video id="remoteVideo" autoplay playsinline></video>
 
-    <!-- THE FIX 1: Use the 'latest' SDK version -->
+    <!-- Load the Cast SDK asynchronously -->
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
     
     <script>
@@ -29,109 +29,107 @@
         const errorEl = document.getElementById('error-display');
         const remoteVideo = document.getElementById('remoteVideo');
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        let peerConnection = null;
+        
+        // --- THE FIX: Wait for the 'load' event before running any Cast code ---
+        window.cast.framework.CastReceiverContext.getInstance().addEventListener(
+            cast.framework.system.EventType.READY, 
+            initializeApp
+        );
 
-        function updateStatus(message) {
-            console.log(message);
-            statusEl.textContent = message;
-        }
-        function displayError(step, error) {
-            const errorMessage = `FAIL @ ${step}: ${error.message}`;
-            console.error(errorMessage, error.stack);
-            errorEl.textContent = errorMessage;
-        }
-
-        try {
-            updateStatus('Getting Cast Context...');
+        function initializeApp() {
             const context = cast.framework.CastReceiverContext.getInstance();
             const castReceiverOptions = new cast.framework.CastReceiverOptions();
             castReceiverOptions.disableIdleTimeout = true;
+            let peerConnection = null;
 
-            // THE FIX 2: Use the 'READY' event listener instead of .then()
-            context.addEventListener(cast.framework.system.EventType.READY, () => {
+            function updateStatus(message) {
+                console.log(message);
+                statusEl.textContent = message;
+            }
+            function displayError(step, error) {
+                const errorMessage = `FAIL @ ${step}: ${error.message}`;
+                console.error(errorMessage, error.stack);
+                errorEl.textContent = errorMessage;
+            }
+
+            try {
                 updateStatus('Ready for Connection...');
-            });
-            
-            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                updateStatus('Sender Disconnected.');
-                if (peerConnection) peerConnection.close();
-            });
 
-            updateStatus('Adding Message Listener...');
-            context.addCustomMessageListener(NAMESPACE, (customEvent) => {
+                context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+                    updateStatus('Sender Disconnected.');
+                    if (peerConnection) peerConnection.close();
+                });
+
+                context.addCustomMessageListener(NAMESPACE, (customEvent) => {
+                    try {
+                        let data = customEvent.data;
+                        if (typeof data === 'string') data = JSON.parse(data);
+                        
+                        if (data.type === 'offer') {
+                            handleOffer(data);
+                        } else if (data.type === 'ice_candidate') {
+                            handleIceCandidate(data);
+                        }
+                    } catch (e) {
+                        displayError('Processing Message', e);
+                    }
+                });
+
+                context.start(castReceiverOptions);
+
+            } catch (e) {
+                displayError('App Init', e);
+            }
+
+            async function handleOffer(data) {
                 try {
-                    let data = customEvent.data;
-                    if (typeof data === 'string') data = JSON.parse(data);
+                    updateStatus('Handling Offer...');
+                    peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+                    peerConnection.ontrack = (event) => {
+                        updateStatus('Track Received!');
+                        if (event.streams && event.streams[0]) {
+                            remoteVideo.srcObject = event.streams[0];
+                            remoteVideo.play().catch(e => displayError('Video Play', e));
+                        }
+                    };
+
+                    peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) sendMessage(event.candidate);
+                    };
                     
-                    if (data.type === 'offer') {
-                        handleOffer(data);
-                    } else if (data.type === 'ice_candidate') {
-                        handleIceCandidate(data);
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    sendMessage({ type: 'answer', sdp: answer.sdp });
+                    updateStatus('Answer Sent. Waiting for video...');
+
+                } catch (e) {
+                    displayError('Handle Offer', e);
+                }
+            }
+
+            async function handleIceCandidate(data) {
+                try {
+                    if (peerConnection && data.candidate) {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(data));
                     }
                 } catch (e) {
-                    displayError('Processing Message', e);
+                    displayError('Handle ICE', e);
                 }
-            });
-
-            updateStatus('Starting Cast Context...');
-            context.start(castReceiverOptions);
-
-        } catch (e) {
-            displayError('Global Init', e);
-        }
-
-        async function handleOffer(data) {
-            try {
-                updateStatus('Handling Offer...');
-                peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-
-                peerConnection.ontrack = (event) => {
-                    updateStatus('Track Received!');
-                    if (event.streams && event.streams[0]) {
-                        remoteVideo.srcObject = event.streams[0];
-                        remoteVideo.play().catch(e => displayError('Video Play', e));
-                    }
-                };
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        sendMessage({
-                            type: 'ice_candidate',
-                            candidate: event.candidate.candidate,
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex
-                        });
-                    }
-                };
-                
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                sendMessage({ type: 'answer', sdp: answer.sdp });
-                updateStatus('Answer Sent. Waiting for video...');
-
-            } catch (e) {
-                displayError('Handle Offer', e);
             }
-        }
 
-        async function handleIceCandidate(data) {
-            try {
-                if (peerConnection && data.candidate) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+            function sendMessage(candidate) {
+                try {
+                    context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify({
+                        type: 'ice_candidate',
+                        candidate: candidate.candidate,
+                        sdpMid: candidate.sdpMid,
+                        sdpMLineIndex: candidate.sdpMLineIndex
+                    }));
+                } catch (e) {
+                    displayError('Send Message', e);
                 }
-            } catch (e) {
-                displayError('Handle ICE', e);
-            }
-        }
-
-        function sendMessage(messageObject) {
-            const context = cast.framework.CastReceiverContext.getInstance();
-            try {
-                context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
-
-            } catch (e) {
-                displayError('Send Message', e);
             }
         }
     </script>
