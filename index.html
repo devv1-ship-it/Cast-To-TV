@@ -2,333 +2,142 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Cast To TV - WebRTC Screen Mirroring</title>
+    <title>DEBUG MODE - WebRTC Receiver</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            overflow: hidden;
-        }
-        #video-container {
-            width: 100vw;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #000;
-        }
-        #remoteVideo {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-        }
+        body { margin: 0; background-color: #111; color: white; font-family: 'Courier New', monospace; }
         #status {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
-            font-family: Arial, sans-serif;
-            font-size: 18px;
-            background: rgba(0,0,0,0.7);
-            padding: 10px 20px;
-            border-radius: 5px;
-            z-index: 1000;
+            position: absolute; top: 20px; left: 20px; font-size: 2em;
+            background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; z-index: 100;
         }
-        #stats {
-            position: absolute;
-            top: 60px;
-            left: 20px;
-            color: #0f0;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            background: rgba(0,0,0,0.7);
-            padding: 5px 10px;
-            border-radius: 5px;
-            z-index: 1000;
+        #error-display {
+            position: absolute; top: 100px; left: 20px; font-size: 1.5em; color: red;
+            background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; z-index: 100;
         }
     </style>
 </head>
 <body>
-    <div id="status">Initializing WebRTC...</div>
-    <div id="stats">Waiting for connection...</div>
-    <div id="video-container">
-        <video id="remoteVideo" autoplay playsinline muted></video>
-    </div>
+<div id="status">Step 1: Initializing...</div>
+<div id="error-display"></div>
+<video id="remoteVideo" autoplay playsinline style="width:100vw; height:100vh; object-fit:contain;"></video>
 
-    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <script>
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error-display');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+    let peerConnection = null;
+
+    function updateStatus(message) {
+        console.log(message);
+        statusEl.textContent = message;
+    }
+
+    function displayError(step, error) {
+        const errorMessage = `FAIL @ ${step}: ${error.message}`;
+        console.error(errorMessage, error.stack);
+        errorEl.textContent = errorMessage;
+        document.body.style.backgroundColor = '#500'; // Dark red background on error
+    }
+
+    try {
+        updateStatus('Step 2: Getting Cast Context...');
         const context = cast.framework.CastReceiverContext.getInstance();
-        const statusEl = document.getElementById('status');
-        const statsEl = document.getElementById('stats');
-        const remoteVideo = document.getElementById('remoteVideo');
-
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-
-        // WebRTC variables
-        let peerConnection = null;
-        let statsInterval = null;
-        let lastBytesReceived = 0;
-        let lastTimestamp = Date.now();
-
-        console.log('=== WebRTC Cast Receiver Initializing ===');
-
-        // Initialize Cast Receiver with optimizations
         const castReceiverOptions = new cast.framework.CastReceiverOptions();
         castReceiverOptions.disableIdleTimeout = true;
-        castReceiverOptions.maxInactivity = 3600;
 
-        // Handle WebRTC signaling messages
+        updateStatus('Step 3: Adding Message Listener...');
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
-                const data = customEvent.data;
-                console.log('Received message type:', data.type);
+                updateStatus('Step 6: Message Received...');
+                let data = customEvent.data;
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
+                }
 
                 if (data.type === 'offer') {
                     handleOffer(data);
                 } else if (data.type === 'ice_candidate') {
                     handleIceCandidate(data);
                 }
-            } catch (error) {
-                console.error('Error processing message:', error);
-                statusEl.textContent = 'Error: ' + error.message;
+            } catch (e) {
+                displayError('Processing Message', e);
             }
         });
 
-        async function handleOffer(data) {
-            try {
-                statusEl.textContent = '📡 Setting up WebRTC connection...';
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            updateStatus('Sender Disconnected.');
+            if (peerConnection) peerConnection.close();
+        });
 
-                // Create peer connection with optimized settings
-                const configuration = {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' }
-                    ],
-                    bundlePolicy: 'max-bundle',
-                    rtcpMuxPolicy: 'require',
-                    // Optimize for low latency
-                    iceTransportPolicy: 'all'
-                };
+        updateStatus('Step 4: Starting Cast Context...');
+        context.start(castReceiverOptions).then(() => {
+            updateStatus('Step 5: Ready for Connection...');
+        }).catch(e => {
+            displayError('Context Start', e);
+        });
 
-                peerConnection = new RTCPeerConnection(configuration);
+    } catch (e) {
+        displayError('Global Init', e);
+    }
 
-                // Handle incoming tracks (video + audio)
-                peerConnection.ontrack = (event) => {
-                    console.log('Received track:', event.track.kind, 'readyState:', event.track.readyState);
-                    if (event.streams && event.streams[0]) {
-                        remoteVideo.srcObject = event.streams[0];
-                        
-                        // Unmute video after receiving stream (muted initially to prevent echo)
-                        remoteVideo.muted = false;
-                        
-                        // Force play
-                        remoteVideo.play().then(() => {
-                            console.log('Video playback started');
-                            statusEl.textContent = '✅ Screen Mirroring Active (WebRTC)';
-                            startStatsMonitoring();
-                        }).catch(err => {
-                            console.error('Error starting video playback:', err);
-                        });
-                    }
-                };
-
-                // Handle ICE connection state
-                peerConnection.oniceconnectionstatechange = () => {
-                    console.log('ICE Connection State:', peerConnection.iceConnectionState);
-                    const state = peerConnection.iceConnectionState;
-                    
-                    if (state === 'connected' || state === 'completed') {
-                        statusEl.textContent = '✅ Connected';
-                    } else if (state === 'disconnected') {
-                        statusEl.textContent = '⚠️ Connection lost - Reconnecting...';
-                    } else if (state === 'failed') {
-                        statusEl.textContent = '❌ Connection failed';
-                        stopStatsMonitoring();
-                    } else if (state === 'checking') {
-                        statusEl.textContent = '🔄 Connecting...';
-                    }
-                };
-
-                // Handle connection state
-                peerConnection.onconnectionstatechange = () => {
-                    console.log('Connection State:', peerConnection.connectionState);
-                };
-
-                // Handle ICE candidates
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        console.log('Generated ICE candidate:', event.candidate.type);
-                        sendIceCandidate(event.candidate);
-                    } else {
-                        console.log('ICE candidate gathering complete');
-                    }
-                };
-
-                // Set remote description (offer)
-                await peerConnection.setRemoteDescription({
-                    type: 'offer',
-                    sdp: data.sdp
-                });
-                console.log('Remote description (offer) set');
-
-                // Create answer with optimized constraints
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                console.log('Local description (answer) set');
-
-                // Send answer back to sender
-                sendAnswer(answer);
-
-            } catch (error) {
-                console.error('Error handling offer:', error);
-                statusEl.textContent = 'Error: ' + error.message;
-            }
-        }
-
-        async function handleIceCandidate(data) {
-            try {
-                if (peerConnection) {
-                    await peerConnection.addIceCandidate({
-                        candidate: data.candidate,
-                        sdpMid: data.sdpMid,
-                        sdpMLineIndex: data.sdpMLineIndex
-                    });
-                    console.log('Added ICE candidate from sender');
-                }
-            } catch (error) {
-                console.error('Error adding ICE candidate:', error);
-            }
-        }
-
-        function sendAnswer(answer) {
-            try {
-                const message = JSON.stringify({
-                    type: 'answer',
-                    sdp: answer.sdp
-                });
-                context.sendCustomMessage(NAMESPACE, undefined, message);
-                console.log('✓ Sent WebRTC answer');
-            } catch (error) {
-                console.error('Error sending answer:', error);
-            }
-        }
-
-        function sendIceCandidate(candidate) {
-            try {
-                const message = JSON.stringify({
-                    type: 'ice_candidate',
-                    candidate: candidate.candidate,
-                    sdpMid: candidate.sdpMid,
-                    sdpMLineIndex: candidate.sdpMLineIndex
-                });
-                context.sendCustomMessage(NAMESPACE, undefined, message);
-            } catch (error) {
-                console.error('Error sending ICE candidate:', error);
-            }
-        }
-
-        function startStatsMonitoring() {
-            if (statsInterval) return;
-
-            statsInterval = setInterval(async () => {
-                if (!peerConnection) return;
-
-                try {
-                    const stats = await peerConnection.getStats();
-                    let fps = 0;
-                    let bitrate = 0;
-                    let resolution = '';
-                    let packetsLost = 0;
-                    let jitter = 0;
-
-                    stats.forEach(report => {
-                        if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
-                            fps = report.framesPerSecond || 0;
-                            packetsLost = report.packetsLost || 0;
-                            jitter = report.jitter || 0;
-                            
-                            // Calculate bitrate
-                            const now = Date.now();
-                            const timeDiff = (now - lastTimestamp) / 1000;
-                            const bytesDiff = (report.bytesReceived || 0) - lastBytesReceived;
-                            bitrate = Math.round((bytesDiff * 8) / timeDiff / 1000); // Kbps
-                            
-                            lastBytesReceived = report.bytesReceived || 0;
-                            lastTimestamp = now;
-                        }
-                        if (report.type === 'track' && report.kind === 'video') {
-                            resolution = `${report.frameWidth}x${report.frameHeight}`;
-                        }
-                    });
-
-                    statsEl.innerHTML = `
-                        FPS: ${fps.toFixed(0)} | Bitrate: ${bitrate} Kbps<br>
-                        Resolution: ${resolution}<br>
-                        Packets Lost: ${packetsLost} | Jitter: ${jitter.toFixed(3)}s
-                    `;
-                } catch (error) {
-                    console.error('Error getting stats:', error);
-                }
-            }, 1000);
-        }
-
-        function stopStatsMonitoring() {
-            if (statsInterval) {
-                clearInterval(statsInterval);
-                statsInterval = null;
-            }
-        }
-
-        // System events
-        context.addEventListener(
-            cast.framework.system.EventType.SENDER_CONNECTED,
-            function(event) {
-                console.log('Sender connected:', event.senderId);
-                statusEl.textContent = 'Device Connected - Waiting for WebRTC...';
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.SENDER_DISCONNECTED,
-            function(event) {
-                console.log('Sender disconnected');
-                statusEl.textContent = 'Device Disconnected';
-                statsEl.textContent = '';
-                remoteVideo.srcObject = null;
-
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
-                }
-                stopStatsMonitoring();
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.READY,
-            function(event) {
-                console.log('Receiver ready');
-                statusEl.textContent = 'Ready - Waiting for connection...';
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.ERROR,
-            function(event) {
-                console.error('Cast Receiver Error:', event);
-                statusEl.textContent = 'Error: ' + event.error;
-            }
-        );
-
-        // Start receiver
+    async function handleOffer(data) {
         try {
-            context.start(castReceiverOptions);
-            console.log('=== WebRTC Cast receiver started ===');
-        } catch (error) {
-            console.error('=== FAILED to start receiver ===', error);
-            statusEl.textContent = 'FAILED TO START: ' + error.message;
-            document.body.style.backgroundColor = 'red';
+            updateStatus('Step 7: Handling Offer...');
+            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            peerConnection = new RTCPeerConnection(configuration);
+
+            peerConnection.ontrack = (event) => {
+                updateStatus('Step 11: Track Received!');
+                if (event.streams && event.streams[0]) {
+                    remoteVideo.srcObject = event.streams[0];
+                    remoteVideo.play().catch(e => displayError('Video Play', e));
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendMessage({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    });
+                }
+            };
+
+            updateStatus('Step 8: Setting Remote Description...');
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data)); // data is already {type: 'offer', sdp: '...'}
+
+            updateStatus('Step 9: Creating Answer...');
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            updateStatus('Step 10: Sending Answer...');
+            sendMessage({ type: 'answer', sdp: answer.sdp });
+
+        } catch (e) {
+            displayError('Handle Offer', e);
         }
-    </script>
+    }
+
+    async function handleIceCandidate(data) {
+        try {
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+            }
+        } catch (e) {
+            displayError('Handle ICE', e);
+        }
+    }
+
+    function sendMessage(messageObject) {
+        try {
+            context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
+        } catch (e) {
+            displayError('Send Message', e);
+        }
+    }
+</script>
 </body>
 </html>
