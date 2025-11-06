@@ -1,189 +1,24 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>Cast To TV - Screen Mirroring Receiver</title>
+    <title>Screen Mirror Receiver</title>
+    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            overflow: hidden;
+        body { margin: 0; background-color: black; color: white; font-family: sans-serif; }
+        #message-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 2em; text-align: center;
         }
-        #video-container {
-            width: 100vw;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
-        canvas {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
-        #status {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
-            font-family: Arial, sans-serif;
-            font-size: 18px;
-            background: rgba(0,0,0,0.7);
-            padding: 10px 20px;
-            border-radius: 5px;
-            z-index: 1000;
-        }
-        #fps {
-            position: absolute;
-            top: 60px;
-            left: 20px;
-            color: white;
-            font-family: Arial, sans-serif;
-            font-size: 14px;
-            background: rgba(0,0,0,0.7);
-            padding: 5px 10px;
-            border-radius: 5px;
-            z-index: 1000;
+        /* Optional: Add a div for the FPS counter */
+        #fps-counter {
+            position: absolute; bottom: 20px; left: 20px; font-size: 1.5em;
+            background-color: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 5px;
         }
     </style>
 </head>
 <body>
-    <div id="status">Waiting for connection...</div>
-    <div id="fps">FPS: 0</div>
-    <div id="video-container">
-        <canvas id="canvas"></canvas>
-    </div>
-
-    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <script>
-        const context = cast.framework.CastReceiverContext.getInstance();
-        const playerManager = context.getPlayerManager();
-        const statusDiv = document.getElementById('status');
-        const fpsDiv = document.getElementById('fps');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-
-        let frameCount = 0;
-        let lastTime = Date.now();
-
-        // Set canvas size
-        canvas.width = 1920;
-        canvas.height = 1080;
-
-        // Configure the receiver
-        const castReceiverOptions = new cast.framework.CastReceiverOptions();
-        castReceiverOptions.disableIdleTimeout = true;
-        castReceiverOptions.maxInactivity = 3600; // 1 hour
-
-        // Handle custom messages for screen mirroring
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-
-        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-            try {
-                const data = customEvent.data;
-                console.log('Received message type:', data.type);
-
-                if (data.type === 'SCREEN_DATA') {
-                    // Handle incoming screen data
-                    statusDiv.textContent = 'Screen mirroring active';
-
-                    // Update FPS counter
-                    frameCount++;
-                    const now = Date.now();
-                    if (now - lastTime >= 1000) {
-                        fpsDiv.textContent = `FPS: ${frameCount}`;
-                        frameCount = 0;
-                        lastTime = now;
-                    }
-
-                    // Decode and display the frame
-                    if (data.videoData) {
-                        const img = new Image();
-                        img.onload = function() {
-                            ctx.clearRect(0, 0, canvas.width, canvas.height);
-                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                        };
-                        img.onerror = function(err) {
-                            console.error('Error loading frame:', err);
-                        };
-                        // Assuming the data is base64 encoded image
-                        img.src = 'data:image/jpeg;base64,' + data.videoData;
-                    }
-                } else if (data.type === 'INIT_STREAM') {
-                    statusDiv.textContent = 'Initializing stream...';
-                    console.log('Stream initialized');
-
-                    // Send acknowledgment back to sender
-                    try {
-                        context.sendCustomMessage(NAMESPACE, customEvent.senderId, {
-                            type: 'INIT_ACK',
-                            message: 'Receiver ready'
-                        });
-                    } catch (e) {
-                        console.error('Error sending ACK:', e);
-                    }
-                }
-            } catch (error) {
-                console.error('Error processing message:', error);
-                statusDiv.textContent = 'Error: ' + error.message;
-            }
-        });
-
-        // Handle player events
-        playerManager.addEventListener(
-            cast.framework.events.category.CORE,
-            event => {
-                console.log('Player event:', event.type);
-            }
-        );
-
-        // Handle system events
-        context.addEventListener(
-            cast.framework.system.EventType.SENDER_CONNECTED,
-            event => {
-                statusDiv.textContent = 'Device connected - Ready to mirror';
-                console.log('Sender connected:', event.senderId);
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.SENDER_DISCONNECTED,
-            event => {
-                statusDiv.textContent = 'Device disconnected';
-                fpsDiv.textContent = 'FPS: 0';
-                frameCount = 0;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                console.log('Sender disconnected:', event.senderId);
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.READY,
-            event => {
-                console.log('Receiver ready - Application ID: D4B7E07C');
-                statusDiv.textContent = 'Receiver ready - Waiting for connection...';
-            }
-        );
-
-        context.addEventListener(
-            cast.framework.system.EventType.ERROR,
-            event => {
-                console.error('Cast error:', event);
-                statusDiv.textContent = 'Error occurred';
-            }
-        );
-
-        // Start the receiver
-        console.log('Starting Cast receiver...');
-        context.start(castReceiverOptions);
-        console.log('Cast receiver started - Application ID: D4B7E07C');
-    </script>
+    <div id="message-overlay">Initializing...</div>
+    <div id="fps-counter">FPS: 0</div>
+    <script src="receiver.js"></script>
 </body>
 </html>
-
