@@ -111,15 +111,28 @@
             peerConnection = new RTCPeerConnection(configuration);
             console.log('PeerConnection created');
 
+            let videoTrackReceived = false;
+            let audioTrackReceived = false;
+
             // CRITICAL: Set up track handler BEFORE setting remote description
             peerConnection.ontrack = (event) => {
                 updateStatus('Step 11: ✅ Track Received! Kind: ' + event.track.kind);
                 console.log('Track kind:', event.track.kind, 'Streams:', event.streams.length);
                 console.log('Track ID:', event.track.id, 'Track state:', event.track.readyState);
+                console.log('Track enabled:', event.track.enabled, 'muted:', event.track.muted);
+
+                // Track which tracks we've received
+                if (event.track.kind === 'video') {
+                    videoTrackReceived = true;
+                } else if (event.track.kind === 'audio') {
+                    audioTrackReceived = true;
+                    console.log('🔊 AUDIO TRACK RECEIVED!');
+                }
 
                 if (event.streams && event.streams[0]) {
                     console.log('Setting srcObject... Stream ID:', event.streams[0].id);
-                    
+                    console.log('Stream tracks:', event.streams[0].getTracks().map(t => `${t.kind} (enabled: ${t.enabled}, muted: ${t.muted})`));
+
                     // Set srcObject immediately for the first track
                     if (!remoteVideo.srcObject) {
                         remoteVideo.srcObject = event.streams[0];
@@ -128,20 +141,49 @@
                         // Update if it's a different stream
                         remoteVideo.srcObject = event.streams[0];
                         console.log('✓ srcObject updated with new stream');
+                    } else {
+                        // Same stream, just add the new track if missing
+                        const currentTracks = remoteVideo.srcObject.getTracks();
+                        const hasThisTrack = currentTracks.some(t => t.id === event.track.id);
+                        if (!hasThisTrack) {
+                            remoteVideo.srcObject.addTrack(event.track);
+                            console.log(`✓ Added ${event.track.kind} track to existing stream`);
+                        }
                     }
-                    
+
+                    // CRITICAL: Ensure video element is NOT muted
+                    remoteVideo.muted = false;
                     remoteVideo.volume = 1.0;
 
+                    console.log('Video element audio settings:', {
+                        muted: remoteVideo.muted,
+                        volume: remoteVideo.volume,
+                        hasAudio: remoteVideo.srcObject.getAudioTracks().length > 0
+                    });
+
                     remoteVideo.play().then(() => {
-                        updateStatus('✅✅✅ VIDEO PLAYING!');
+                        updateStatus('✅✅✅ VIDEO PLAYING! Audio: ' + (audioTrackReceived ? 'YES' : 'NO'));
                         document.body.style.backgroundColor = '#006600'; // Bright green = video playing
                         console.log('Video state:', {
                             paused: remoteVideo.paused,
                             videoWidth: remoteVideo.videoWidth,
                             videoHeight: remoteVideo.videoHeight,
                             volume: remoteVideo.volume,
+                            muted: remoteVideo.muted,
                             readyState: remoteVideo.readyState,
-                            networkState: remoteVideo.networkState
+                            networkState: remoteVideo.networkState,
+                            audioTracks: remoteVideo.srcObject.getAudioTracks().length,
+                            videoTracks: remoteVideo.srcObject.getVideoTracks().length
+                        });
+                        
+                        // Log each audio track state
+                        remoteVideo.srcObject.getAudioTracks().forEach((track, idx) => {
+                            console.log(`Audio track ${idx}:`, {
+                                id: track.id,
+                                enabled: track.enabled,
+                                muted: track.muted,
+                                readyState: track.readyState
+                            });
                         });
                     }).catch(e => {
                         console.error('Play error:', e);
@@ -161,7 +203,7 @@
                 console.log('ICE Connection State:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
                     updateStatus('Step 12: ✅ ICE CONNECTED!');
-                    
+
                     // Check if we have tracks
                     const receivers = peerConnection.getReceivers();
                     console.log('Total receivers:', receivers.length);
@@ -191,7 +233,7 @@
                 sdp: data.sdp
             }));
             console.log('✓ Remote description set');
-            
+
             // Log transceivers after setting remote description
             const transceivers = peerConnection.getTransceivers();
             console.log('Transceivers count:', transceivers.length);
@@ -212,7 +254,7 @@
             updateStatus('Step 10: Sending Answer...');
             sendMessage({ type: 'answer', sdp: answer.sdp });
             console.log('✓ Answer sent');
-            
+
             // Force check for tracks after a short delay
             setTimeout(() => {
                 const receivers = peerConnection.getReceivers();
