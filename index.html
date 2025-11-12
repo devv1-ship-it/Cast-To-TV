@@ -31,7 +31,7 @@
 </head>
 <body>
 <div id="status">Connecting...</div>
-<video id="remoteVideo" autoplay playsinline></video>
+<video id="remoteVideo" autoplay playsinline muted="false"></video>
 
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script>
@@ -40,6 +40,10 @@
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
     let context = null;
+
+    // Ensure video is not muted
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
 
     // Audio playback components
     let audioContext = null;
@@ -114,8 +118,12 @@
 
     function handleAudioData(data) {
         if (!audioContext) {
-            console.warn('AudioContext not initialized');
-            return;
+            console.warn('AudioContext not initialized, initializing now...');
+            initializeAudioContext();
+            if (!audioContext) {
+                console.error('Failed to initialize AudioContext');
+                return;
+            }
         }
 
         try {
@@ -155,6 +163,13 @@
             }
 
             playAudioBuffer(audioBuffer);
+
+            // Log occasionally to confirm audio is being received
+            if (!window.audioPacketCount) window.audioPacketCount = 0;
+            window.audioPacketCount++;
+            if (window.audioPacketCount % 100 === 0) {
+                console.log('✓ System audio packets received:', window.audioPacketCount);
+            }
         } catch (e) {
             console.error('Error processing audio data:', e);
         }
@@ -203,17 +218,42 @@
             let streamSet = false;
 
             peerConnection.ontrack = (event) => {
-                console.log('Track received:', event.track.kind);
+                console.log('Track received:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
 
                 if (event.streams && event.streams[0]) {
                     if (!streamSet) {
-                        console.log('Setting video stream');
+                        console.log('Setting video stream with', event.streams[0].getTracks().length, 'tracks');
+
+                        // Log all tracks
+                        event.streams[0].getTracks().forEach(track => {
+                            console.log('Stream track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                        });
+
                         remoteVideo.srcObject = event.streams[0];
                         streamSet = true;
 
+                        // Ensure video is not muted and has volume
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+
                         remoteVideo.play().then(() => {
-                            console.log('Video playback started');
-                            statusEl.textContent = 'Streaming (Video + System Audio)';
+                            console.log('✓ Video playback started');
+                            console.log('Video element - muted:', remoteVideo.muted, 'volume:', remoteVideo.volume);
+
+                            // Check audio tracks
+                            const audioTracks = event.streams[0].getAudioTracks();
+                            console.log('Audio tracks:', audioTracks.length);
+                            audioTracks.forEach((track, idx) => {
+                                console.log(`Audio track ${idx}:`, {
+                                    id: track.id,
+                                    label: track.label,
+                                    enabled: track.enabled,
+                                    muted: track.muted,
+                                    readyState: track.readyState
+                                });
+                            });
+
+                            statusEl.textContent = 'Streaming (Video + Audio)';
                         }).catch(e => console.error('Play failed:', e));
                     }
                 }
@@ -222,7 +262,7 @@
             peerConnection.oniceconnectionstatechange = () => {
                 console.log('ICE state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
-                    statusEl.textContent = 'Streaming (Video + System Audio)';
+                    statusEl.textContent = 'Streaming (Video + Audio)';
                 }
             };
 
@@ -251,10 +291,10 @@
 
             setTimeout(() => {
                 const receivers = peerConnection.getReceivers();
-                console.log('Receivers:', receivers.length);
+                console.log('Total receivers:', receivers.length);
                 receivers.forEach((receiver, index) => {
                     if (receiver.track) {
-                        console.log(`Track ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                        console.log(`Receiver ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState, 'enabled:', receiver.track.enabled);
                     }
                 });
             }, 1500);
