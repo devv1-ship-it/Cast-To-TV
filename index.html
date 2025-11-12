@@ -201,46 +201,66 @@
             peerConnection = new RTCPeerConnection(configuration);
 
             let streamSet = false;
-            let receivedStream = new MediaStream();
+            let receivedTracks = [];
+            let setupTimeout = null;
 
             peerConnection.ontrack = (event) => {
                 console.log('📺 Track received:', event.track.kind, 'id:', event.track.id, 'enabled:', event.track.enabled, 'readyState:', event.track.readyState);
 
-                // Add track to our stream
-                receivedStream.addTrack(event.track);
-                
-                if (event.streams && event.streams[0]) {
-                    if (!streamSet) {
-                        console.log('✓ Setting video stream from event.streams[0]');
-                        remoteVideo.srcObject = event.streams[0];
+                receivedTracks.push(event.track);
+
+                // Clear any existing timeout
+                if (setupTimeout) {
+                    clearTimeout(setupTimeout);
+                }
+
+                // Wait a bit for all tracks to arrive, then set up the stream
+                setupTimeout = setTimeout(() => {
+                    if (!streamSet && receivedTracks.length > 0) {
+                        console.log('✓ Setting up video with', receivedTracks.length, 'track(s)');
+
+                        // Try using event.streams first, fallback to manual stream
+                        if (event.streams && event.streams[0]) {
+                            remoteVideo.srcObject = event.streams[0];
+                            console.log('✓ Using event.streams[0]');
+                        } else {
+                            const stream = new MediaStream(receivedTracks);
+                            remoteVideo.srcObject = stream;
+                            console.log('✓ Created new MediaStream with tracks');
+                        }
+
                         streamSet = true;
 
+                        // Force play
                         remoteVideo.play().then(() => {
                             console.log('✓ Video playback started');
                             statusEl.textContent = 'Streaming (Video + System Audio)';
-                        }).catch(e => console.error('❌ Play failed:', e));
+                        }).catch(e => {
+                            console.error('❌ Play failed:', e);
+                            // Try again with muted
+                            remoteVideo.muted = true;
+                            remoteVideo.play().then(() => {
+                                console.log('✓ Video playback started (muted)');
+                                statusEl.textContent = 'Streaming (Muted)';
+                            }).catch(e2 => console.error('❌ Play failed even when muted:', e2));
+                        });
                     }
-                } else if (!streamSet && receivedStream.getTracks().length > 0) {
-                    // Fallback: use our manually constructed stream
-                    console.log('✓ Setting video stream from receivedStream, tracks:', receivedStream.getTracks().length);
-                    remoteVideo.srcObject = receivedStream;
-                    streamSet = true;
-                    
-                    remoteVideo.play().then(() => {
-                        console.log('✓ Video playback started (fallback method)');
-                        statusEl.textContent = 'Streaming (Video + System Audio)';
-                    }).catch(e => console.error('❌ Play failed:', e));
-                }
+                }, 500);
             };
 
             peerConnection.oniceconnectionstatechange = () => {
                 console.log('⚡ ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected') {
-                    statusEl.textContent = 'Streaming (Video + System Audio)';
+                if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
                     console.log('✓ ICE Connected');
                 } else if (peerConnection.iceConnectionState === 'failed') {
                     console.error('❌ ICE Connection Failed');
-                    statusEl.textContent = 'Connection Failed';
+                    statusEl.textContent = 'Connection Failed - Retrying...';
+
+                    // Try to restart ICE
+                    if (peerConnection) {
+                        console.log('Attempting ICE restart...');
+                        peerConnection.restartIce();
+                    }
                 } else if (peerConnection.iceConnectionState === 'disconnected') {
                     console.warn('⚠ ICE Disconnected');
                 }
@@ -248,6 +268,11 @@
 
             peerConnection.onconnectionstatechange = () => {
                 console.log('🔗 Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + System Audio)';
+                } else if (peerConnection.connectionState === 'failed') {
+                    statusEl.textContent = 'Connection Failed';
+                }
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -288,7 +313,7 @@
                         console.log(`  Track ${index}:`, receiver.track.kind, 'enabled:', receiver.track.enabled, 'state:', receiver.track.readyState, 'muted:', receiver.track.muted);
                     }
                 });
-                
+
                 // Check video element
                 console.log('📺 Video element srcObject:', remoteVideo.srcObject);
                 if (remoteVideo.srcObject) {
@@ -298,6 +323,9 @@
                         console.log(`  ${idx}: ${track.kind} - enabled: ${track.enabled}, readyState: ${track.readyState}`);
                     });
                 }
+
+                // Force video to be visible
+                remoteVideo.style.display = 'block';
             }, 2000);
 
         } catch (e) {
