@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>MSE Screen Mirroring Receiver</title>
+    <style>
+        body { margin: 0; background-color: black; }
+        video { width: 100vw; height: 100vh; object-fit: contain; }
+    </style>
+</head>
+<body>
+    <video id="remoteVideo"></video>
+
+    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
+    <script>
+        // Use the official Cast SDK loader to prevent race conditions
+        window.__onGCastApiAvailable = function(isAvailable) {
+            if (isAvailable) {
+                initializeApp();
+            } else {
+                console.error("FATAL: Cast API not available.");
+            }
+        };
+
+        function initializeApp() {
+            const remoteVideo = document.getElementById('remoteVideo');
+            const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+            
+            const context = cast.framework.CastReceiverContext.getInstance();
+            const castReceiverOptions = new cast.framework.CastReceiverOptions();
+            castReceiverOptions.disableIdleTimeout = true;
+
+            let mediaSource = new MediaSource();
+            remoteVideo.src = URL.createObjectURL(mediaSource);
+
+            let videoSourceBuffer;
+            let audioSourceBuffer;
+            let videoQueue = [];
+            let audioQueue = [];
+            let isFirstFrame = true;
+
+            mediaSource.addEventListener('sourceopen', () => {
+                console.log('MediaSource is open. Ready for data.');
+                try {
+                    // These codecs MUST match what MediaCodec produces on Android.
+                    const videoCodec = 'video/mp4; codecs="avc1.42E01E"'; // H.264 Baseline Profile.
+                    const audioCodec = 'audio/mp4; codecs="mp4a.40.2"'; // AAC-LC (Low Complexity).
+
+                    if (MediaSource.isTypeSupported(videoCodec)) {
+                        videoSourceBuffer = mediaSource.addSourceBuffer(videoCodec);
+                        videoSourceBuffer.addEventListener('updateend', () => processQueue(videoQueue, videoSourceBuffer));
+                        console.log('Video buffer created.');
+                    } else { console.error('Video codec not supported:', videoCodec); }
+
+                    if (MediaSource.isTypeSupported(audioCodec)) {
+                        audioSourceBuffer = mediaSource.addSourceBuffer(audioCodec);
+                        audioSourceBuffer.addEventListener('updateend', () => processQueue(audioQueue, audioSourceBuffer));
+                        console.log('Audio buffer created.');
+                    } else { console.error('Audio codec not supported:', audioCodec); }
+                } catch (e) { console.error("Error creating source buffers:", e); }
+            });
+
+            function processQueue(queue, buffer) {
+                if (queue.length > 0 && buffer && !buffer.updating) {
+                    try { buffer.appendBuffer(queue.shift()); } catch (e) { console.error("Error appending buffer:", e); }
+                }
+            }
+            
+            context.addCustomMessageListener(NAMESPACE, (customEvent) => {
+                try {
+                    const message = JSON.parse(customEvent.data);
+                    
+                    const binaryString = window.atob(message.data);
+                    const len = binaryString.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    const frameData = bytes.buffer;
+
+                    if (message.type === 'video') {
+                        if (videoSourceBuffer) {
+                            if (!videoSourceBuffer.updating) {
+                                try { videoSourceBuffer.appendBuffer(frameData); } catch (e) { videoQueue.push(frameData); }
+                            } else { videoQueue.push(frameData); }
+                        }
+                    } else if (message.type === 'audio') {
+                        if (audioSourceBuffer) {
+                            if (!audioSourceBuffer.updating) {
+                                try { audioSourceBuffer.appendBuffer(frameData); } catch (e) { audioQueue.push(frameData); }
+                            } else { audioQueue.push(frameData); }
+                        }
+                    }
+
+                    if (isFirstFrame && remoteVideo.buffered.length > 0 && remoteVideo.buffered.end(0) > 0.1) {
+                        isFirstFrame = false;
+                        remoteVideo.play().catch(e => console.error("Autoplay failed:", e));
+                    }
+                } catch (e) { /* Ignore parsing errors on some frames */ }
+            });
+            
+            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+                window.location.reload(); // Simple reset
+            });
+
+            context.start(castReceiverOptions);
+        }
+    </script>
+</body>
+</html>
