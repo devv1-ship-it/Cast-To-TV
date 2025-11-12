@@ -2,17 +2,17 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>MediaCodec Screen Mirroring Receiver</title>
+    <title>HTTP Stream Receiver</title>
     <style>
-        body {
-            margin: 0;
-            background-color: black;
+        body { 
+            margin: 0; 
+            background-color: black; 
             overflow: hidden;
         }
-        #videoCanvas {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
+        #videoCanvas { 
+            width: 100vw; 
+            height: 100vh; 
+            object-fit: contain; 
             display: block;
         }
         #status {
@@ -38,7 +38,7 @@
         const canvas = document.getElementById('videoCanvas');
         const ctx = canvas.getContext('2d');
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-
+        
         let videoDecoder = null;
         let audioDecoder = null;
         let audioContext = null;
@@ -47,6 +47,7 @@
         let frameCount = 0;
         let videoWidth = 1280;
         let videoHeight = 720;
+        let streamingUrl = null;
 
         // Set canvas size
         canvas.width = videoWidth;
@@ -60,7 +61,7 @@
         // Initialize WebCodecs decoders
         function initializeDecoders() {
             if (isInitialized) return;
-
+            
             try {
                 // Video decoder (H.264)
                 videoDecoder = new VideoDecoder({
@@ -110,7 +111,7 @@
                             const source = audioContext.createBufferSource();
                             source.buffer = audioBuffer;
                             source.connect(audioContext.destination);
-
+                            
                             if (nextAudioTime < audioContext.currentTime) {
                                 nextAudioTime = audioContext.currentTime;
                             }
@@ -134,7 +135,7 @@
                 });
 
                 isInitialized = true;
-                statusEl.textContent = 'Ready - Waiting for stream...';
+                statusEl.textContent = 'Ready - Waiting for stream URL...';
                 console.log('Decoders initialized successfully');
             } catch (e) {
                 console.error('Failed to initialize decoders:', e);
@@ -142,37 +143,100 @@
             }
         }
 
+        // Fetch and decode video stream from HTTP server
+        async function startVideoStream(url) {
+            try {
+                statusEl.textContent = 'Fetching video stream...';
+                console.log('Fetching video from:', url);
+                
+                const response = await fetch(url);
+                const reader = response.body.getReader();
+                
+                let buffer = new Uint8Array(0);
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        console.log('Video stream ended');
+                        break;
+                    }
+                    
+                    // Append new data to buffer
+                    const newBuffer = new Uint8Array(buffer.length + value.length);
+                    newBuffer.set(buffer);
+                    newBuffer.set(value, buffer.length);
+                    buffer = newBuffer;
+                    
+                    // Try to extract NAL units (H.264 frames)
+                    let nalStart = 0;
+                    for (let i = 0; i < buffer.length - 4; i++) {
+                        // Look for NAL unit start code (0x00000001 or 0x000001)
+                        if (buffer[i] === 0 && buffer[i+1] === 0) {
+                            if ((buffer[i+2] === 0 && buffer[i+3] === 1) || buffer[i+2] === 1) {
+                                if (nalStart > 0) {
+                                    // Found a complete NAL unit
+                                    const nalUnit = buffer.slice(nalStart, i);
+                                    processVideoNalUnit(nalUnit);
+                                }
+                                nalStart = i;
+                            }
+                        }
+                    }
+                    
+                    // Keep remaining data in buffer
+                    if (nalStart > 0) {
+                        buffer = buffer.slice(nalStart);
+                    }
+                }
+            } catch (e) {
+                console.error('Video streaming error:', e);
+                statusEl.textContent = 'Stream error: ' + e.message;
+            }
+        }
+
+        function processVideoNalUnit(nalUnit) {
+            if (!videoDecoder || videoDecoder.state !== 'configured') return;
+            
+            try {
+                // Determine if this is a keyframe (IDR frame)
+                const nalType = nalUnit[4] & 0x1F;
+                const isKeyFrame = nalType === 5; // IDR frame
+                
+                const chunk = new EncodedVideoChunk({
+                    type: isKeyFrame ? 'key' : 'delta',
+                    timestamp: performance.now() * 1000,
+                    data: nalUnit
+                });
+                
+                videoDecoder.decode(chunk);
+            } catch (e) {
+                console.error('Error decoding video NAL unit:', e);
+            }
+        }
+
         // Handle incoming Cast messages
         context.addCustomMessageListener(NAMESPACE, (customEvent) => {
-            if (!isInitialized) {
-                initializeDecoders();
-            }
-
             try {
                 const message = JSON.parse(customEvent.data);
+                console.log('Received message:', message.type);
                 
-                // Decode base64 data
-                const binaryString = atob(message.data);
-                const len = binaryString.length;
-                const bytes = new Uint8Array(len);
-                for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-
-                if (message.type === 'video' && videoDecoder && videoDecoder.state === 'configured') {
-                    const chunk = new EncodedVideoChunk({
-                        type: message.keyframe ? 'key' : 'delta', // Use actual keyframe info
-                        timestamp: performance.now() * 1000, // microseconds
-                        data: bytes
-                    });
-                    videoDecoder.decode(chunk);
-                } else if (message.type === 'audio' && audioDecoder && audioDecoder.state === 'configured') {
-                    const chunk = new EncodedAudioChunk({
-                        type: 'key',
-                        timestamp: performance.now() * 1000,
-                        data: bytes
-                    });
-                    audioDecoder.decode(chunk);
+                if (message.type === 'stream_url') {
+                    // Received streaming URLs from Android
+                    console.log('Video URL:', message.videoUrl);
+                    console.log('Audio URL:', message.audioUrl);
+                    
+                    streamingUrl = message;
+                    
+                    if (!isInitialized) {
+                        initializeDecoders();
+                    }
+                    
+                    // Start fetching streams
+                    statusEl.textContent = 'Starting HTTP stream...';
+                    setTimeout(() => {
+                        startVideoStream(message.videoUrl);
+                    }, 500);
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
@@ -180,12 +244,12 @@
         });
 
         context.addEventListener(cast.framework.system.EventType.READY, () => {
-            statusEl.textContent = 'Cast Ready';
+            statusEl.textContent = 'Cast Ready - Waiting for stream';
             console.log('Receiver ready');
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
-            statusEl.textContent = 'Sender connected';
+            statusEl.textContent = 'Sender connected - Waiting for stream URL';
             frameCount = 0;
         });
 
@@ -201,3 +265,4 @@
     </script>
 </body>
 </html>
+
