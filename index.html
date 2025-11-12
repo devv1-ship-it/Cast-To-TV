@@ -1,3 +1,4 @@
+<!--THIS FILE IS UPLOADED TO SERVER AND PUBLISHED-->
 <!DOCTYPE html>
 <html>
 <head>
@@ -190,163 +191,76 @@
 
     async function handleOffer(data) {
         try {
-            console.log('📥 Handling offer');
+            console.log('Handling offer');
 
             const configuration = {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { 
-                        urls: 'turn:openrelay.metered.ca:80',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    },
-                    { 
-                        urls: 'turn:openrelay.metered.ca:443',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    }
-                ],
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
                 bundlePolicy: 'max-bundle',
-                rtcpMuxPolicy: 'require',
-                sdpSemantics: 'unified-plan',
-                iceCandidatePoolSize: 10
+                rtcpMuxPolicy: 'require'
             };
-            console.log('🔧 Using', configuration.iceServers.length, 'ICE servers (STUN+TURN)');
-            
             peerConnection = new RTCPeerConnection(configuration);
 
             let streamSet = false;
-            let receivedTracks = [];
-            let setupTimeout = null;
 
             peerConnection.ontrack = (event) => {
-                console.log('📺 Track received:', event.track.kind, 'id:', event.track.id, 'enabled:', event.track.enabled, 'readyState:', event.track.readyState);
+                console.log('Track received:', event.track.kind);
 
-                receivedTracks.push(event.track);
-
-                // Clear any existing timeout
-                if (setupTimeout) {
-                    clearTimeout(setupTimeout);
-                }
-
-                // Wait a bit for all tracks to arrive, then set up the stream
-                setupTimeout = setTimeout(() => {
-                    if (!streamSet && receivedTracks.length > 0) {
-                        console.log('✓ Setting up video with', receivedTracks.length, 'track(s)');
-
-                        // Try using event.streams first, fallback to manual stream
-                        if (event.streams && event.streams[0]) {
-                            remoteVideo.srcObject = event.streams[0];
-                            console.log('✓ Using event.streams[0]');
-                        } else {
-                            const stream = new MediaStream(receivedTracks);
-                            remoteVideo.srcObject = stream;
-                            console.log('✓ Created new MediaStream with tracks');
-                        }
-
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting video stream');
+                        remoteVideo.srcObject = event.streams[0];
                         streamSet = true;
 
-                        // Force play
                         remoteVideo.play().then(() => {
-                            console.log('✓ Video playback started');
+                            console.log('Video playback started');
                             statusEl.textContent = 'Streaming (Video + System Audio)';
-                        }).catch(e => {
-                            console.error('❌ Play failed:', e);
-                            // Try again with muted
-                            remoteVideo.muted = true;
-                            remoteVideo.play().then(() => {
-                                console.log('✓ Video playback started (muted)');
-                                statusEl.textContent = 'Streaming (Muted)';
-                            }).catch(e2 => console.error('❌ Play failed even when muted:', e2));
-                        });
+                        }).catch(e => console.error('Play failed:', e));
                     }
-                }, 500);
+                }
             };
 
             peerConnection.oniceconnectionstatechange = () => {
-                console.log('⚡ ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-                    console.log('✓ ICE Connected');
-                } else if (peerConnection.iceConnectionState === 'failed') {
-                    console.error('❌ ICE Connection Failed');
-                    statusEl.textContent = 'Connection Failed - Retrying...';
-
-                    // Try to restart ICE
-                    if (peerConnection) {
-                        console.log('Attempting ICE restart...');
-                        peerConnection.restartIce();
-                    }
-                } else if (peerConnection.iceConnectionState === 'disconnected') {
-                    console.warn('⚠ ICE Disconnected');
-                }
-            };
-
-            peerConnection.onconnectionstatechange = () => {
-                console.log('🔗 Connection state:', peerConnection.connectionState);
-                if (peerConnection.connectionState === 'connected') {
+                console.log('ICE state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
                     statusEl.textContent = 'Streaming (Video + System Audio)';
-                } else if (peerConnection.connectionState === 'failed') {
-                    statusEl.textContent = 'Connection Failed';
                 }
             };
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log('🧊 ICE candidate:', event.candidate.candidate);
                     sendMessage({
                         type: 'ice_candidate',
                         candidate: event.candidate.candidate,
                         sdpMid: event.candidate.sdpMid,
                         sdpMLineIndex: event.candidate.sdpMLineIndex
                     });
-                } else {
-                    console.log('✓ ICE gathering complete');
                 }
             };
 
-            console.log('📝 Setting remote description...');
             await peerConnection.setRemoteDescription(new RTCSessionDescription({
                 type: 'offer',
                 sdp: data.sdp
             }));
-            console.log('✓ Remote description set');
+            console.log('Remote description set');
 
-            console.log('📝 Creating answer...');
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
-            console.log('✓ Answer created and set as local description');
+            console.log('Answer created');
 
-            console.log('📤 Sending answer to sender');
             sendMessage({ type: 'answer', sdp: answer.sdp });
 
-            // Debug: Check receivers after a delay
             setTimeout(() => {
                 const receivers = peerConnection.getReceivers();
-                console.log('📊 Receivers count:', receivers.length);
+                console.log('Receivers:', receivers.length);
                 receivers.forEach((receiver, index) => {
                     if (receiver.track) {
-                        console.log(`  Track ${index}:`, receiver.track.kind, 'enabled:', receiver.track.enabled, 'state:', receiver.track.readyState, 'muted:', receiver.track.muted);
+                        console.log(`Track ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
                     }
                 });
-
-                // Check video element
-                console.log('📺 Video element srcObject:', remoteVideo.srcObject);
-                if (remoteVideo.srcObject) {
-                    const tracks = remoteVideo.srcObject.getTracks();
-                    console.log('📺 Video element tracks:', tracks.length);
-                    tracks.forEach((track, idx) => {
-                        console.log(`  ${idx}: ${track.kind} - enabled: ${track.enabled}, readyState: ${track.readyState}`);
-                    });
-                }
-
-                // Force video to be visible
-                remoteVideo.style.display = 'block';
-            }, 2000);
+            }, 1500);
 
         } catch (e) {
-            console.error('❌ Offer handling error:', e);
+            console.error('Offer handling error:', e);
             statusEl.textContent = 'Error: ' + e.message;
         }
     }
