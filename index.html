@@ -190,76 +190,118 @@
 
     async function handleOffer(data) {
         try {
-            console.log('Handling offer');
+            console.log('📥 Handling offer');
 
             const configuration = {
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
                 bundlePolicy: 'max-bundle',
-                rtcpMuxPolicy: 'require'
+                rtcpMuxPolicy: 'require',
+                sdpSemantics: 'unified-plan'
             };
             peerConnection = new RTCPeerConnection(configuration);
 
             let streamSet = false;
+            let receivedStream = new MediaStream();
 
             peerConnection.ontrack = (event) => {
-                console.log('Track received:', event.track.kind);
+                console.log('📺 Track received:', event.track.kind, 'id:', event.track.id, 'enabled:', event.track.enabled, 'readyState:', event.track.readyState);
 
+                // Add track to our stream
+                receivedStream.addTrack(event.track);
+                
                 if (event.streams && event.streams[0]) {
                     if (!streamSet) {
-                        console.log('Setting video stream');
+                        console.log('✓ Setting video stream from event.streams[0]');
                         remoteVideo.srcObject = event.streams[0];
                         streamSet = true;
 
                         remoteVideo.play().then(() => {
-                            console.log('Video playback started');
+                            console.log('✓ Video playback started');
                             statusEl.textContent = 'Streaming (Video + System Audio)';
-                        }).catch(e => console.error('Play failed:', e));
+                        }).catch(e => console.error('❌ Play failed:', e));
                     }
+                } else if (!streamSet && receivedStream.getTracks().length > 0) {
+                    // Fallback: use our manually constructed stream
+                    console.log('✓ Setting video stream from receivedStream, tracks:', receivedStream.getTracks().length);
+                    remoteVideo.srcObject = receivedStream;
+                    streamSet = true;
+                    
+                    remoteVideo.play().then(() => {
+                        console.log('✓ Video playback started (fallback method)');
+                        statusEl.textContent = 'Streaming (Video + System Audio)';
+                    }).catch(e => console.error('❌ Play failed:', e));
                 }
             };
 
             peerConnection.oniceconnectionstatechange = () => {
-                console.log('ICE state:', peerConnection.iceConnectionState);
+                console.log('⚡ ICE state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
                     statusEl.textContent = 'Streaming (Video + System Audio)';
+                    console.log('✓ ICE Connected');
+                } else if (peerConnection.iceConnectionState === 'failed') {
+                    console.error('❌ ICE Connection Failed');
+                    statusEl.textContent = 'Connection Failed';
+                } else if (peerConnection.iceConnectionState === 'disconnected') {
+                    console.warn('⚠ ICE Disconnected');
                 }
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                console.log('🔗 Connection state:', peerConnection.connectionState);
             };
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log('🧊 ICE candidate:', event.candidate.candidate);
                     sendMessage({
                         type: 'ice_candidate',
                         candidate: event.candidate.candidate,
                         sdpMid: event.candidate.sdpMid,
                         sdpMLineIndex: event.candidate.sdpMLineIndex
                     });
+                } else {
+                    console.log('✓ ICE gathering complete');
                 }
             };
 
+            console.log('📝 Setting remote description...');
             await peerConnection.setRemoteDescription(new RTCSessionDescription({
                 type: 'offer',
                 sdp: data.sdp
             }));
-            console.log('Remote description set');
+            console.log('✓ Remote description set');
 
+            console.log('📝 Creating answer...');
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
-            console.log('Answer created');
+            console.log('✓ Answer created and set as local description');
 
+            console.log('📤 Sending answer to sender');
             sendMessage({ type: 'answer', sdp: answer.sdp });
 
+            // Debug: Check receivers after a delay
             setTimeout(() => {
                 const receivers = peerConnection.getReceivers();
-                console.log('Receivers:', receivers.length);
+                console.log('📊 Receivers count:', receivers.length);
                 receivers.forEach((receiver, index) => {
                     if (receiver.track) {
-                        console.log(`Track ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                        console.log(`  Track ${index}:`, receiver.track.kind, 'enabled:', receiver.track.enabled, 'state:', receiver.track.readyState, 'muted:', receiver.track.muted);
                     }
                 });
-            }, 1500);
+                
+                // Check video element
+                console.log('📺 Video element srcObject:', remoteVideo.srcObject);
+                if (remoteVideo.srcObject) {
+                    const tracks = remoteVideo.srcObject.getTracks();
+                    console.log('📺 Video element tracks:', tracks.length);
+                    tracks.forEach((track, idx) => {
+                        console.log(`  ${idx}: ${track.kind} - enabled: ${track.enabled}, readyState: ${track.readyState}`);
+                    });
+                }
+            }, 2000);
 
         } catch (e) {
-            console.error('Offer handling error:', e);
+            console.error('❌ Offer handling error:', e);
             statusEl.textContent = 'Error: ' + e.message;
         }
     }
