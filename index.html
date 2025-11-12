@@ -1,4 +1,4 @@
-<!--THIS FILE IS FOR NATIVE SCREEN MIRRORING (Android 15+)-->
+<!--THIS FILE IS FOR NATIVE SCREEN MIRRORING using Broadway.js H.264 decoder-->
 <!DOCTYPE html>
 <html>
 <head>
@@ -11,7 +11,7 @@
             color: white;
             font-family: Arial, sans-serif;
         }
-        #remoteVideo {
+        #videoCanvas {
             width: 100vw;
             height: 100vh;
             object-fit: contain;
@@ -41,28 +41,23 @@
     </style>
 </head>
 <body>
-<div id="status">Connecting...</div>
+<div id="status">Loading decoder...</div>
 <div id="debug"></div>
-<video id="remoteVideo" autoplay playsinline muted="false"></video>
+<canvas id="videoCanvas"></canvas>
 
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/broadway-player@1.0.5/Player/Player.min.js"></script>
+
 <script>
     const statusEl = document.getElementById('status');
     const debugEl = document.getElementById('debug');
-    const remoteVideo = document.getElementById('remoteVideo');
+    const canvas = document.getElementById('videoCanvas');
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring.native';
-    
-    let context = null;
-    let mediaSource = null;
-    let sourceBuffer = null;
-    let videoFormat = null;
-    let frameCount = 0;
-    let bufferQueue = [];
-    let isAppending = false;
 
-    // Ensure video is not muted
-    remoteVideo.muted = false;
-    remoteVideo.volume = 1.0;
+    let context = null;
+    let player = null;
+    let frameCount = 0;
+    let lastFrameTime = Date.now();
 
     function updateDebug(msg) {
         debugEl.innerHTML = msg;
@@ -71,6 +66,28 @@
     function log(msg) {
         console.log(msg);
         updateDebug(msg);
+    }
+
+    // Initialize Broadway H.264 decoder
+    function initializeDecoder() {
+        try {
+            player = new Player({
+                useWorker: true,
+                workerFile: "https://cdn.jsdelivr.net/npm/broadway-player@1.0.5/Player/Decoder.min.js",
+                webgl: true,
+                size: { width: 720, height: 1640 }
+            });
+
+            player.canvas = canvas;
+
+            statusEl.textContent = 'Decoder ready';
+            console.log('Broadway decoder initialized');
+
+        } catch (e) {
+            console.error('Failed to initialize decoder:', e);
+            statusEl.textContent = 'Error: Decoder failed';
+            log('Decoder error: ' + e.message);
+        }
     }
 
     try {
@@ -100,18 +117,22 @@
         context.addEventListener(cast.framework.system.EventType.READY, () => {
             statusEl.textContent = 'Ready';
             console.log('Receiver ready');
+            initializeDecoder();
             sendReadyMessage();
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-            statusEl.textContent = 'Connected - Waiting for video...';
+            statusEl.textContent = 'Connected - Initializing...';
             console.log('Sender connected:', event.senderId);
+            if (!player) {
+                initializeDecoder();
+            }
             sendReadyMessage();
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
             statusEl.textContent = 'Disconnected';
-            cleanup();
+            frameCount = 0;
         });
 
         context.start(castReceiverOptions);
@@ -133,93 +154,24 @@
 
     function handleVideoFormat(data) {
         console.log('Video format received:', data);
-        videoFormat = data;
-        
-        // Initialize MediaSource
-        if ('MediaSource' in window) {
-            setupMediaSource(data.width, data.height, data.codec, data.fps);
-        } else {
-            log('MediaSource API not supported');
-            statusEl.textContent = 'Error: MediaSource not supported';
-        }
-    }
 
-    function setupMediaSource(width, height, codec, fps) {
-        try {
-            mediaSource = new MediaSource();
-            remoteVideo.src = URL.createObjectURL(mediaSource);
+        // Resize canvas
+        canvas.width = data.width;
+        canvas.height = data.height;
 
-            mediaSource.addEventListener('sourceopen', () => {
-                console.log('MediaSource opened');
-                
-                try {
-                    // Try different codec strings
-                    const codecStrings = [
-                        'video/mp4; codecs="avc1.42E01E"', // Baseline Profile
-                        'video/mp4; codecs="avc1.4D401E"', // Main Profile
-                        'video/mp4; codecs="avc1.640028"', // High Profile
-                        'video/mp4; codecs="avc1.42001E"'  // Constrained Baseline
-                    ];
-
-                    let codecUsed = null;
-                    for (let codecString of codecStrings) {
-                        if (MediaSource.isTypeSupported(codecString)) {
-                            sourceBuffer = mediaSource.addSourceBuffer(codecString);
-                            codecUsed = codecString;
-                            break;
-                        }
-                    }
-
-                    if (!sourceBuffer) {
-                        throw new Error('No supported H.264 codec found');
-                    }
-
-                    console.log('SourceBuffer created with codec:', codecUsed);
-                    log(`Video: ${width}x${height} @ ${fps}fps<br>Codec: ${codecUsed}`);
-
-                    sourceBuffer.mode = 'sequence';
-                    
-                    sourceBuffer.addEventListener('updateend', () => {
-                        isAppending = false;
-                        processBufferQueue();
-                    });
-
-                    sourceBuffer.addEventListener('error', (e) => {
-                        console.error('SourceBuffer error:', e);
-                    });
-
-                    statusEl.textContent = 'Ready to receive video';
-
-                } catch (e) {
-                    console.error('SourceBuffer setup error:', e);
-                    log('Setup error: ' + e.message);
-                    statusEl.textContent = 'Error: ' + e.message;
-                }
-            });
-
-            mediaSource.addEventListener('sourceended', () => {
-                console.log('MediaSource ended');
-            });
-
-            mediaSource.addEventListener('sourceclose', () => {
-                console.log('MediaSource closed');
-            });
-
-        } catch (e) {
-            console.error('MediaSource setup error:', e);
-            log('MediaSource error: ' + e.message);
-        }
+        log(`Video: ${data.width}x${data.height} @ ${data.fps}fps<br>Codec: ${data.codec}`);
+        statusEl.textContent = 'Ready to receive video';
     }
 
     function handleVideoData(data) {
         try {
-            if (!sourceBuffer) {
-                console.warn('SourceBuffer not ready, ignoring frame');
+            if (!player) {
+                console.warn('Decoder not ready');
                 return;
             }
 
             frameCount++;
-            
+
             // Decode base64 H.264 data
             const binaryString = atob(data.data);
             const bytes = new Uint8Array(binaryString.length);
@@ -227,114 +179,34 @@
                 bytes[i] = binaryString.charCodeAt(i);
             }
 
-            // Check if this is a keyframe (flags & BUFFER_FLAG_KEY_FRAME)
+            // Check if this is a keyframe
             const isKeyFrame = (data.flags & 1) !== 0;
 
-            if (frameCount === 1 || isKeyFrame) {
-                console.log('Received', isKeyFrame ? 'keyframe' : 'frame', 
-                           'size:', bytes.length, 'timestamp:', data.timestamp);
+            // Decode and render frame
+            player.decode(bytes);
+
+            // Update stats
+            const now = Date.now();
+            const fps = 1000 / (now - lastFrameTime);
+            lastFrameTime = now;
+
+            if (frameCount % 30 === 0) {
+                statusEl.textContent = `Streaming (${frameCount} frames, ${fps.toFixed(1)} fps)`;
+                log(`Frames: ${frameCount}<br>FPS: ${fps.toFixed(1)}<br>Keyframe: ${isKeyFrame}`);
             }
 
-            // Add to queue
-            bufferQueue.push(bytes);
-            processBufferQueue();
-
-            // Update status
-            if (frameCount % 30 === 0) {
-                statusEl.textContent = `Streaming (${frameCount} frames)`;
-                log(`Frames: ${frameCount}<br>Buffer queue: ${bufferQueue.length}<br>Video time: ${remoteVideo.currentTime.toFixed(2)}s`);
+            if (frameCount === 1) {
+                console.log('First frame decoded!');
+                statusEl.textContent = 'Streaming';
             }
 
         } catch (e) {
             console.error('Error processing video data:', e);
             if (frameCount < 10) {
-                log('Video data error: ' + e.message);
+                log('Video decode error: ' + e.message);
             }
         }
     }
-
-    function processBufferQueue() {
-        if (isAppending || bufferQueue.length === 0 || !sourceBuffer) {
-            return;
-        }
-
-        if (sourceBuffer.updating) {
-            return;
-        }
-
-        try {
-            const data = bufferQueue.shift();
-            isAppending = true;
-            
-            // Wrap H.264 data in MP4 container
-            const mp4Data = createMP4Segment(data);
-            sourceBuffer.appendBuffer(mp4Data);
-
-        } catch (e) {
-            console.error('Error appending buffer:', e);
-            isAppending = false;
-            
-            // Clear queue on error
-            if (e.name === 'QuotaExceededError') {
-                console.log('Quota exceeded, clearing old buffer');
-                bufferQueue = [];
-                
-                if (sourceBuffer && !sourceBuffer.updating && remoteVideo.currentTime > 5) {
-                    try {
-                        sourceBuffer.remove(0, remoteVideo.currentTime - 5);
-                    } catch (removeError) {
-                        console.error('Remove error:', removeError);
-                    }
-                }
-            }
-        }
-    }
-
-    // Simple MP4 muxing - this is a placeholder
-    // In production, you'd need a proper MP4 muxer library like mux.js
-    function createMP4Segment(h264Data) {
-        // For now, return raw data
-        // NOTE: This won't work perfectly - you need proper MP4 muxing
-        // Consider using a library like broadway.js or mux.js
-        return h264Data;
-    }
-
-    function cleanup() {
-        frameCount = 0;
-        bufferQueue = [];
-        isAppending = false;
-        
-        try {
-            if (sourceBuffer && mediaSource && mediaSource.readyState === 'open') {
-                mediaSource.removeSourceBuffer(sourceBuffer);
-            }
-            sourceBuffer = null;
-        } catch (e) {
-            console.error('Cleanup error:', e);
-        }
-
-        try {
-            if (mediaSource && mediaSource.readyState === 'open') {
-                mediaSource.endOfStream();
-            }
-            mediaSource = null;
-        } catch (e) {
-            console.error('MediaSource cleanup error:', e);
-        }
-
-        remoteVideo.src = '';
-    }
-
-    // Monitor video element
-    remoteVideo.addEventListener('loadeddata', () => {
-        console.log('Video loaded');
-        statusEl.textContent = 'Streaming';
-    });
-
-    remoteVideo.addEventListener('error', (e) => {
-        console.error('Video element error:', e);
-        log('Video error: ' + (remoteVideo.error ? remoteVideo.error.message : 'unknown'));
-    });
 
 </script>
 </body>
