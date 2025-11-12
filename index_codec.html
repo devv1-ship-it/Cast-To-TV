@@ -2,109 +2,203 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>MSE Screen Mirroring Receiver</title>
+    <title>MediaCodec Screen Mirroring Receiver</title>
     <style>
-        body { margin: 0; background-color: black; }
-        video { width: 100vw; height: 100vh; object-fit: contain; }
+        body { 
+            margin: 0; 
+            background-color: black; 
+            overflow: hidden;
+        }
+        #videoCanvas { 
+            width: 100vw; 
+            height: 100vh; 
+            object-fit: contain; 
+            display: block;
+        }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-family: Arial;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
-    <video id="remoteVideo"></video>
+    <div id="status">Initializing...</div>
+    <canvas id="videoCanvas"></canvas>
 
-    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/latest/cast_receiver_framework.js"></script>
+    <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script>
-        // Use the official Cast SDK loader to prevent race conditions
-        window.__onGCastApiAvailable = function(isAvailable) {
-            if (isAvailable) {
-                initializeApp();
-            } else {
-                console.error("FATAL: Cast API not available.");
-            }
-        };
+        const statusEl = document.getElementById('status');
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+        
+        let videoDecoder = null;
+        let audioDecoder = null;
+        let audioContext = null;
+        let nextAudioTime = 0;
+        let isInitialized = false;
+        let frameCount = 0;
+        let videoWidth = 1280;
+        let videoHeight = 720;
 
-        function initializeApp() {
-            const remoteVideo = document.getElementById('remoteVideo');
-            const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+        // Set canvas size
+        canvas.width = videoWidth;
+        canvas.height = videoHeight;
+
+        // Initialize Cast Receiver
+        const context = cast.framework.CastReceiverContext.getInstance();
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+
+        // Initialize WebCodecs decoders
+        function initializeDecoders() {
+            if (isInitialized) return;
             
-            const context = cast.framework.CastReceiverContext.getInstance();
-            const castReceiverOptions = new cast.framework.CastReceiverOptions();
-            castReceiverOptions.disableIdleTimeout = true;
-
-            let mediaSource = new MediaSource();
-            remoteVideo.src = URL.createObjectURL(mediaSource);
-
-            let videoSourceBuffer;
-            let audioSourceBuffer;
-            let videoQueue = [];
-            let audioQueue = [];
-            let isFirstFrame = true;
-
-            mediaSource.addEventListener('sourceopen', () => {
-                console.log('MediaSource is open. Ready for data.');
-                try {
-                    // These codecs MUST match what MediaCodec produces on Android.
-                    const videoCodec = 'video/mp4; codecs="avc1.42E01E"'; // H.264 Baseline Profile.
-                    const audioCodec = 'audio/mp4; codecs="mp4a.40.2"'; // AAC-LC (Low Complexity).
-
-                    if (MediaSource.isTypeSupported(videoCodec)) {
-                        videoSourceBuffer = mediaSource.addSourceBuffer(videoCodec);
-                        videoSourceBuffer.addEventListener('updateend', () => processQueue(videoQueue, videoSourceBuffer));
-                        console.log('Video buffer created.');
-                    } else { console.error('Video codec not supported:', videoCodec); }
-
-                    if (MediaSource.isTypeSupported(audioCodec)) {
-                        audioSourceBuffer = mediaSource.addSourceBuffer(audioCodec);
-                        audioSourceBuffer.addEventListener('updateend', () => processQueue(audioQueue, audioSourceBuffer));
-                        console.log('Audio buffer created.');
-                    } else { console.error('Audio codec not supported:', audioCodec); }
-                } catch (e) { console.error("Error creating source buffers:", e); }
-            });
-
-            function processQueue(queue, buffer) {
-                if (queue.length > 0 && buffer && !buffer.updating) {
-                    try { buffer.appendBuffer(queue.shift()); } catch (e) { console.error("Error appending buffer:", e); }
-                }
-            }
-            
-            context.addCustomMessageListener(NAMESPACE, (customEvent) => {
-                try {
-                    const message = JSON.parse(customEvent.data);
-                    
-                    const binaryString = window.atob(message.data);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    const frameData = bytes.buffer;
-
-                    if (message.type === 'video') {
-                        if (videoSourceBuffer) {
-                            if (!videoSourceBuffer.updating) {
-                                try { videoSourceBuffer.appendBuffer(frameData); } catch (e) { videoQueue.push(frameData); }
-                            } else { videoQueue.push(frameData); }
+            try {
+                // Video decoder (H.264)
+                videoDecoder = new VideoDecoder({
+                    output: (frame) => {
+                        try {
+                            ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+                            frame.close();
+                            frameCount++;
+                            if (frameCount % 60 === 0) {
+                                statusEl.textContent = `Playing... (${frameCount} frames)`;
+                            }
+                        } catch (e) {
+                            console.error('Frame render error:', e);
                         }
-                    } else if (message.type === 'audio') {
-                        if (audioSourceBuffer) {
-                            if (!audioSourceBuffer.updating) {
-                                try { audioSourceBuffer.appendBuffer(frameData); } catch (e) { audioQueue.push(frameData); }
-                            } else { audioQueue.push(frameData); }
+                    },
+                    error: (e) => {
+                        console.error('Video decoder error:', e);
+                        statusEl.textContent = 'Video Error: ' + e.message;
+                    }
+                });
+
+                videoDecoder.configure({
+                    codec: 'avc1.42E01E', // H.264 Baseline Profile
+                    codedWidth: videoWidth,
+                    codedHeight: videoHeight,
+                });
+
+                // Audio decoder (AAC)
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                nextAudioTime = audioContext.currentTime;
+
+                audioDecoder = new AudioDecoder({
+                    output: (audioData) => {
+                        try {
+                            const audioBuffer = audioContext.createBuffer(
+                                audioData.numberOfChannels,
+                                audioData.numberOfFrames,
+                                audioData.sampleRate
+                            );
+
+                            for (let channel = 0; channel < audioData.numberOfChannels; channel++) {
+                                const channelData = new Float32Array(audioData.numberOfFrames);
+                                audioData.copyTo(channelData, { planeIndex: channel });
+                                audioBuffer.copyToChannel(channelData, channel);
+                            }
+
+                            const source = audioContext.createBufferSource();
+                            source.buffer = audioBuffer;
+                            source.connect(audioContext.destination);
+                            
+                            if (nextAudioTime < audioContext.currentTime) {
+                                nextAudioTime = audioContext.currentTime;
+                            }
+                            source.start(nextAudioTime);
+                            nextAudioTime += audioBuffer.duration;
+
+                            audioData.close();
+                        } catch (e) {
+                            console.error('Audio playback error:', e);
                         }
+                    },
+                    error: (e) => {
+                        console.error('Audio decoder error:', e);
                     }
+                });
 
-                    if (isFirstFrame && remoteVideo.buffered.length > 0 && remoteVideo.buffered.end(0) > 0.1) {
-                        isFirstFrame = false;
-                        remoteVideo.play().catch(e => console.error("Autoplay failed:", e));
-                    }
-                } catch (e) { /* Ignore parsing errors on some frames */ }
-            });
-            
-            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                window.location.reload(); // Simple reset
-            });
+                audioDecoder.configure({
+                    codec: 'mp4a.40.2', // AAC-LC
+                    sampleRate: 48000,
+                    numberOfChannels: 2
+                });
 
-            context.start(castReceiverOptions);
+                isInitialized = true;
+                statusEl.textContent = 'Ready - Waiting for stream...';
+                console.log('Decoders initialized successfully');
+            } catch (e) {
+                console.error('Failed to initialize decoders:', e);
+                statusEl.textContent = 'Decoder init failed: ' + e.message;
+            }
         }
+
+        // Handle incoming Cast messages
+        context.addCustomMessageListener(NAMESPACE, (customEvent) => {
+            if (!isInitialized) {
+                initializeDecoders();
+            }
+
+            try {
+                const message = JSON.parse(customEvent.data);
+                
+                // Decode base64 data
+                const binaryString = atob(message.data);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                if (message.type === 'video' && videoDecoder && videoDecoder.state === 'configured') {
+                    const chunk = new EncodedVideoChunk({
+                        type: 'key', // Assume all frames are key frames for now
+                        timestamp: performance.now() * 1000, // microseconds
+                        data: bytes
+                    });
+                    videoDecoder.decode(chunk);
+                } else if (message.type === 'audio' && audioDecoder && audioDecoder.state === 'configured') {
+                    const chunk = new EncodedAudioChunk({
+                        type: 'key',
+                        timestamp: performance.now() * 1000,
+                        data: bytes
+                    });
+                    audioDecoder.decode(chunk);
+                }
+            } catch (e) {
+                console.error('Message processing error:', e);
+            }
+        });
+
+        context.addEventListener(cast.framework.system.EventType.READY, () => {
+            statusEl.textContent = 'Cast Ready';
+            console.log('Receiver ready');
+        });
+
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
+            statusEl.textContent = 'Sender connected';
+            frameCount = 0;
+        });
+
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            statusEl.textContent = 'Disconnected';
+            if (videoDecoder) videoDecoder.close();
+            if (audioDecoder) audioDecoder.close();
+            if (audioContext) audioContext.close();
+            isInitialized = false;
+        });
+
+        context.start(castReceiverOptions);
     </script>
 </body>
 </html>
+
