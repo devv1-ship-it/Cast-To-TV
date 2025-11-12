@@ -1,9 +1,9 @@
-<!--THIS FILE IS FOR NATIVE SCREEN MIRRORING using Broadway.js H.264 decoder-->
+<!--THIS FILE IS UPLOADED TO SERVER AND PUBLISHED-->
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Native Screen Mirroring</title>
+    <title>WebRTC Screen Mirroring</title>
     <style>
         body {
             margin: 0;
@@ -11,7 +11,7 @@
             color: white;
             font-family: Arial, sans-serif;
         }
-        #videoCanvas {
+        #remoteVideo {
             width: 100vw;
             height: 100vh;
             object-fit: contain;
@@ -27,68 +27,29 @@
             border-radius: 5px;
             z-index: 100;
         }
-        #debug {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            font-size: 0.9em;
-            background: rgba(0,0,0,0.7);
-            padding: 10px 15px;
-            border-radius: 5px;
-            z-index: 100;
-            max-width: 400px;
-        }
     </style>
 </head>
 <body>
-<div id="status">Loading decoder...</div>
-<div id="debug"></div>
-<canvas id="videoCanvas"></canvas>
+<div id="status">Connecting...</div>
+<video id="remoteVideo" autoplay playsinline muted="false"></video>
 
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/broadway-player@1.0.5/Player/Player.min.js"></script>
-
 <script>
     const statusEl = document.getElementById('status');
-    const debugEl = document.getElementById('debug');
-    const canvas = document.getElementById('videoCanvas');
-    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring.native';
-
+    const remoteVideo = document.getElementById('remoteVideo');
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+    let peerConnection = null;
     let context = null;
-    let player = null;
-    let frameCount = 0;
-    let lastFrameTime = Date.now();
 
-    function updateDebug(msg) {
-        debugEl.innerHTML = msg;
-    }
+    // Ensure video is not muted
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
 
-    function log(msg) {
-        console.log(msg);
-        updateDebug(msg);
-    }
-
-    // Initialize Broadway H.264 decoder
-    function initializeDecoder() {
-        try {
-            player = new Player({
-                useWorker: true,
-                workerFile: "https://cdn.jsdelivr.net/npm/broadway-player@1.0.5/Player/Decoder.min.js",
-                webgl: true,
-                size: { width: 720, height: 1640 }
-            });
-
-            player.canvas = canvas;
-
-            statusEl.textContent = 'Decoder ready';
-            console.log('Broadway decoder initialized');
-
-        } catch (e) {
-            console.error('Failed to initialize decoder:', e);
-            statusEl.textContent = 'Error: Decoder failed';
-            log('Decoder error: ' + e.message);
-        }
-    }
+    // Audio playback components
+    let audioContext = null;
+    let audioQueue = [];
+    let isPlayingAudio = false;
+    let nextPlayTime = 0;
 
     try {
         context = cast.framework.CastReceiverContext.getInstance();
@@ -103,36 +64,37 @@
                     data = JSON.parse(data);
                 }
 
-                if (data.type === 'video_format') {
-                    handleVideoFormat(data);
-                } else if (data.type === 'video_data') {
-                    handleVideoData(data);
+                if (data.type === 'offer') {
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    handleIceCandidate(data);
+                } else if (data.type === 'audio') {
+                    handleAudioData(data);
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
-                log('Error: ' + e.message);
             }
         });
 
         context.addEventListener(cast.framework.system.EventType.READY, () => {
             statusEl.textContent = 'Ready';
             console.log('Receiver ready');
-            initializeDecoder();
-            sendReadyMessage();
+            initializeAudioContext();
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-            statusEl.textContent = 'Connected - Initializing...';
+            statusEl.textContent = 'Connected - Waiting for stream...';
             console.log('Sender connected:', event.senderId);
-            if (!player) {
-                initializeDecoder();
-            }
-            sendReadyMessage();
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
             statusEl.textContent = 'Disconnected';
-            frameCount = 0;
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            stopAudioPlayback();
         });
 
         context.start(castReceiverOptions);
@@ -142,73 +104,229 @@
         statusEl.textContent = 'Error: ' + e.message;
     }
 
-    function sendReadyMessage() {
+    function initializeAudioContext() {
         try {
-            const message = JSON.stringify({ type: 'ready' });
-            context.sendCustomMessage(NAMESPACE, undefined, message);
-            console.log('Sent ready message');
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 48000,
+                latencyHint: 'interactive'
+            });
+            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
         } catch (e) {
-            console.error('Failed to send ready message:', e);
+            console.error('Failed to initialize AudioContext:', e);
         }
     }
 
-    function handleVideoFormat(data) {
-        console.log('Video format received:', data);
-
-        // Resize canvas
-        canvas.width = data.width;
-        canvas.height = data.height;
-
-        log(`Video: ${data.width}x${data.height} @ ${data.fps}fps<br>Codec: ${data.codec}`);
-        statusEl.textContent = 'Ready to receive video';
-    }
-
-    function handleVideoData(data) {
-        try {
-            if (!player) {
-                console.warn('Decoder not ready');
+    function handleAudioData(data) {
+        if (!audioContext) {
+            console.warn('AudioContext not initialized, initializing now...');
+            initializeAudioContext();
+            if (!audioContext) {
+                console.error('Failed to initialize AudioContext');
                 return;
             }
+        }
 
-            frameCount++;
-
-            // Decode base64 H.264 data
+        try {
+            // Decode base64 audio data
             const binaryString = atob(data.data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
             }
 
-            // Check if this is a keyframe
-            const isKeyFrame = (data.flags & 1) !== 0;
-
-            // Decode and render frame
-            player.decode(bytes);
-
-            // Update stats
-            const now = Date.now();
-            const fps = 1000 / (now - lastFrameTime);
-            lastFrameTime = now;
-
-            if (frameCount % 30 === 0) {
-                statusEl.textContent = `Streaming (${frameCount} frames, ${fps.toFixed(1)} fps)`;
-                log(`Frames: ${frameCount}<br>FPS: ${fps.toFixed(1)}<br>Keyframe: ${isKeyFrame}`);
+            // Convert PCM bytes to Float32Array
+            const int16Array = new Int16Array(bytes.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
             }
 
-            if (frameCount === 1) {
-                console.log('First frame decoded!');
-                statusEl.textContent = 'Streaming';
+            // Split stereo data into left and right channels
+            const channels = data.channels || 2;
+            const samplesPerChannel = float32Array.length / channels;
+
+            // Create AudioBuffer
+            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
+
+            if (channels === 2) {
+                const leftChannel = audioBuffer.getChannelData(0);
+                const rightChannel = audioBuffer.getChannelData(1);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    leftChannel[i] = float32Array[i * 2];
+                    rightChannel[i] = float32Array[i * 2 + 1];
+                }
+            } else {
+                const channelData = audioBuffer.getChannelData(0);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    channelData[i] = float32Array[i];
+                }
             }
 
+            playAudioBuffer(audioBuffer);
+
+            // Log occasionally to confirm audio is being received
+            if (!window.audioPacketCount) window.audioPacketCount = 0;
+            window.audioPacketCount++;
+            if (window.audioPacketCount % 100 === 0) {
+                console.log('✓ System audio packets received:', window.audioPacketCount);
+            }
         } catch (e) {
-            console.error('Error processing video data:', e);
-            if (frameCount < 10) {
-                log('Video decode error: ' + e.message);
+            console.error('Error processing audio data:', e);
+        }
+    }
+
+    function playAudioBuffer(audioBuffer) {
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+
+        // Schedule playback
+        const currentTime = audioContext.currentTime;
+        if (nextPlayTime < currentTime) {
+            nextPlayTime = currentTime;
+        }
+
+        source.start(nextPlayTime);
+        nextPlayTime += audioBuffer.duration;
+    }
+
+    function stopAudioPlayback() {
+        audioQueue = [];
+        isPlayingAudio = false;
+        nextPlayTime = 0;
+        if (audioContext) {
+            try {
+                audioContext.close();
+                audioContext = null;
+            } catch (e) {
+                console.error('Error closing AudioContext:', e);
             }
         }
     }
 
+    async function handleOffer(data) {
+        try {
+            console.log('Handling offer');
+
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            };
+            peerConnection = new RTCPeerConnection(configuration);
+
+            let streamSet = false;
+
+            peerConnection.ontrack = (event) => {
+                console.log('Track received:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
+
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting video stream with', event.streams[0].getTracks().length, 'tracks');
+
+                        // Log all tracks
+                        event.streams[0].getTracks().forEach(track => {
+                            console.log('Stream track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                        });
+
+                        remoteVideo.srcObject = event.streams[0];
+                        streamSet = true;
+
+                        // Ensure video is not muted and has volume
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+
+                        remoteVideo.play().then(() => {
+                            console.log('✓ Video playback started');
+                            console.log('Video element - muted:', remoteVideo.muted, 'volume:', remoteVideo.volume);
+
+                            // Check audio tracks
+                            const audioTracks = event.streams[0].getAudioTracks();
+                            console.log('Audio tracks:', audioTracks.length);
+                            audioTracks.forEach((track, idx) => {
+                                console.log(`Audio track ${idx}:`, {
+                                    id: track.id,
+                                    label: track.label,
+                                    enabled: track.enabled,
+                                    muted: track.muted,
+                                    readyState: track.readyState
+                                });
+                            });
+
+                            statusEl.textContent = 'Streaming (Video + Audio)';
+                        }).catch(e => console.error('Play failed:', e));
+                    }
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + Audio)';
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendMessage({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    });
+                }
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+            console.log('Remote description set');
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            console.log('Answer created');
+
+            sendMessage({ type: 'answer', sdp: answer.sdp });
+
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Total receivers:', receivers.length);
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`Receiver ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState, 'enabled:', receiver.track.enabled);
+                    }
+                });
+            }, 1500);
+
+        } catch (e) {
+            console.error('Offer handling error:', e);
+            statusEl.textContent = 'Error: ' + e.message;
+        }
+    }
+
+    async function handleIceCandidate(data) {
+        try {
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate({
+                    candidate: data.candidate,
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex
+                }));
+            }
+        } catch (e) {
+            console.error('ICE candidate error:', e);
+        }
+    }
+
+    function sendMessage(messageObject) {
+        try {
+            const messageStr = JSON.stringify(messageObject);
+            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
+        } catch (e) {
+            console.error('Send message error:', e);
+        }
+    }
 </script>
 </body>
 </html>
-
