@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <title>MediaCodec Screen Mirroring Receiver</title>
     <style>
-        body { 
-            margin: 0; 
-            background-color: black; 
+        body {
+            margin: 0;
+            background-color: black;
             overflow: hidden;
         }
-        #videoCanvas { 
-            width: 100vw; 
-            height: 100vh; 
-            object-fit: contain; 
+        #videoCanvas {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
             display: block;
         }
         #status {
@@ -38,7 +38,7 @@
         const canvas = document.getElementById('videoCanvas');
         const ctx = canvas.getContext('2d');
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        
+
         let videoDecoder = null;
         let audioDecoder = null;
         let audioContext = null;
@@ -60,7 +60,7 @@
         // Initialize WebCodecs decoders
         function initializeDecoders() {
             if (isInitialized) return;
-            
+
             try {
                 // Video decoder (H.264)
                 videoDecoder = new VideoDecoder({
@@ -110,7 +110,7 @@
                             const source = audioContext.createBufferSource();
                             source.buffer = audioBuffer;
                             source.connect(audioContext.destination);
-                            
+
                             if (nextAudioTime < audioContext.currentTime) {
                                 nextAudioTime = audioContext.currentTime;
                             }
@@ -161,7 +161,7 @@
 
                 if (message.type === 'video' && videoDecoder && videoDecoder.state === 'configured') {
                     const chunk = new EncodedVideoChunk({
-                        type: 'key', // Assume all frames are key frames for now
+                        type: message.keyframe ? 'key' : 'delta', // Use actual keyframe info
                         timestamp: performance.now() * 1000, // microseconds
                         data: bytes
                     });
@@ -201,4 +201,3 @@
     </script>
 </body>
 </html>
-
