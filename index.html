@@ -1,12 +1,32 @@
+<!--THIS FILE IS UPLOADED TO SERVER AND PUBLISHED-->
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <title>WebRTC Screen Mirroring</title>
     <style>
-        body { margin: 0; background-color: #000; color: white; font-family: Arial, sans-serif; }
-        #remoteVideo { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
-        #status { position: absolute; top: 20px; left: 20px; font-size: 1.2em; background: rgba(0,0,0,0.7); padding: 10px 15px; border-radius: 5px; z-index: 100; }
+        body {
+            margin: 0;
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #remoteVideo {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            background: #000;
+        }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 1.2em;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
@@ -21,182 +41,291 @@
     let peerConnection = null;
     let context = null;
 
+    // Ensure video is not muted
     remoteVideo.muted = false;
     remoteVideo.volume = 1.0;
 
-    // --- JITTER BUFFER FOR SMOOTH AUDIO ---
+    // Audio playback components
     let audioContext = null;
-    const audioQueue = [];
+    let audioQueue = [];
     let isPlayingAudio = false;
     let nextPlayTime = 0;
 
-    function initializeAudioContext(sampleRate) {
-        if (audioContext && audioContext.sampleRate === sampleRate) return;
-        if (audioContext) audioContext.close();
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: sampleRate,
-                latencyHint: 'interactive'
-            });
-            console.log('AudioContext initialized at:', audioContext.sampleRate, 'Hz');
-        } catch (e) { console.error('Failed to initialize AudioContext:', e); }
-    }
-
-    function processAudioQueue() {
-        if (audioQueue.length === 0) { isPlayingAudio = false; return; }
-        const bufferToPlay = audioQueue.shift();
-        const source = audioContext.createBufferSource();
-        source.buffer = bufferToPlay;
-        source.connect(audioContext.destination);
-        source.onended = processAudioQueue;
-        const currentTime = audioContext.currentTime;
-        if (nextPlayTime < currentTime) nextPlayTime = currentTime;
-        source.start(nextPlayTime);
-        nextPlayTime += bufferToPlay.duration;
-    }
-
-    // This function is now called by the DataChannel's onmessage event.
-    async function onAudioDataReceived(arrayBuffer) {
-        if (!audioContext) initializeAudioContext(24000); // Default to our known sample rate
-        if (!audioContext) return;
-
-        try {
-            const int16Array = new Int16Array(arrayBuffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0;
-            }
-            const audioBuffer = audioContext.createBuffer(1, float32Array.length, audioContext.sampleRate);
-            audioBuffer.getChannelData(0).set(float32Array);
-            audioQueue.push(audioBuffer);
-            const START_THRESHOLD = 5;
-            if (!isPlayingAudio && audioQueue.length > START_THRESHOLD) {
-                isPlayingAudio = true;
-                processAudioQueue();
-            }
-        } catch(e) {}
-    }
-
-    function stopAudioPlayback() {
-        audioQueue.length = 0;
-        isPlayingAudio = false;
-        nextPlayTime = 0;
-        if (audioContext) {
-            try { audioContext.close(); audioContext = null; } catch (e) {}
-        }
-    }
-
-    // --- YOUR CONNECTION LOGIC (UNCHANGED, BUT WITH DATACHANNEL ADDED) ---
     try {
         context = cast.framework.CastReceiverContext.getInstance();
         const castReceiverOptions = new cast.framework.CastReceiverOptions();
         castReceiverOptions.disableIdleTimeout = true;
         castReceiverOptions.maxInactivity = 3600;
 
-        // The message listener is now only for signaling (offer/ice_candidate)
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
-                let data = JSON.parse(customEvent.data);
+                let data = customEvent.data;
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
+                }
+
                 if (data.type === 'offer') {
                     handleOffer(data);
                 } else if (data.type === 'ice_candidate') {
                     handleIceCandidate(data);
+                } else if (data.type === 'audio') {
+                    handleAudioData(data);
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error('Message processing error:', e);
+            }
         });
 
         context.addEventListener(cast.framework.system.EventType.READY, () => {
             statusEl.textContent = 'Ready';
+            console.log('Receiver ready');
+            initializeAudioContext();
         });
+
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
             statusEl.textContent = 'Connected - Waiting for stream...';
+            console.log('Sender connected:', event.senderId);
         });
+
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
             statusEl.textContent = 'Disconnected';
-            if (peerConnection) peerConnection.close();
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
             remoteVideo.srcObject = null;
             stopAudioPlayback();
         });
+
         context.start(castReceiverOptions);
+
     } catch (e) {
+        console.error('Init error:', e);
         statusEl.textContent = 'Error: ' + e.message;
+    }
+
+    function initializeAudioContext() {
+        try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 48000,
+                latencyHint: 'interactive'
+            });
+            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
+        } catch (e) {
+            console.error('Failed to initialize AudioContext:', e);
+        }
+    }
+
+    function handleAudioData(data) {
+        if (!audioContext) {
+            console.warn('AudioContext not initialized, initializing now...');
+            initializeAudioContext();
+            if (!audioContext) {
+                console.error('Failed to initialize AudioContext');
+                return;
+            }
+        }
+
+        try {
+            // Decode base64 audio data
+            const binaryString = atob(data.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Convert PCM bytes to Float32Array
+            const int16Array = new Int16Array(bytes.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
+            }
+
+            // Split stereo data into left and right channels
+            const channels = data.channels || 2;
+            const samplesPerChannel = float32Array.length / channels;
+
+            // Create AudioBuffer
+            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
+
+            if (channels === 2) {
+                const leftChannel = audioBuffer.getChannelData(0);
+                const rightChannel = audioBuffer.getChannelData(1);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    leftChannel[i] = float32Array[i * 2];
+                    rightChannel[i] = float32Array[i * 2 + 1];
+                }
+            } else {
+                const channelData = audioBuffer.getChannelData(0);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    channelData[i] = float32Array[i];
+                }
+            }
+
+            playAudioBuffer(audioBuffer);
+
+            // Log occasionally to confirm audio is being received
+            if (!window.audioPacketCount) window.audioPacketCount = 0;
+            window.audioPacketCount++;
+            if (window.audioPacketCount % 100 === 0) {
+                console.log('✓ System audio packets received:', window.audioPacketCount);
+            }
+        } catch (e) {
+            console.error('Error processing audio data:', e);
+        }
+    }
+
+    function playAudioBuffer(audioBuffer) {
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+
+        // Schedule playback
+        const currentTime = audioContext.currentTime;
+        if (nextPlayTime < currentTime) {
+            nextPlayTime = currentTime;
+        }
+
+        source.start(nextPlayTime);
+        nextPlayTime += audioBuffer.duration;
+    }
+
+    function stopAudioPlayback() {
+        audioQueue = [];
+        isPlayingAudio = false;
+        nextPlayTime = 0;
+        if (audioContext) {
+            try {
+                audioContext.close();
+                audioContext = null;
+            } catch (e) {
+                console.error('Error closing AudioContext:', e);
+            }
+        }
     }
 
     async function handleOffer(data) {
         try {
             console.log('Handling offer');
-            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' };
+
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            };
             peerConnection = new RTCPeerConnection(configuration);
 
-            // THE ONLY ADDITION: We tell the connection to listen for the DataChannel.
-            peerConnection.ondatachannel = (event) => {
-                const receiveChannel = event.channel;
-                console.log('>>> Audio DataChannel received:', receiveChannel.label);
-                // When a message (raw audio data) arrives, feed it to our jitter buffer.
-                receiveChannel.onmessage = (messageEvent) => {
-                    onAudioDataReceived(messageEvent.data);
-                };
-            };
-
-            // Your ontrack logic is UNCHANGED.
             let streamSet = false;
+
             peerConnection.ontrack = (event) => {
-                if (event.streams && event.streams[0] && !streamSet) {
-                    remoteVideo.srcObject = event.streams[0];
-                    streamSet = true;
-                    remoteVideo.play().catch(e => console.error('Play failed:', e));
+                console.log('Track received:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
+
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting video stream with', event.streams[0].getTracks().length, 'tracks');
+
+                        // Log all tracks
+                        event.streams[0].getTracks().forEach(track => {
+                            console.log('Stream track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                        });
+
+                        remoteVideo.srcObject = event.streams[0];
+                        streamSet = true;
+
+                        // Ensure video is not muted and has volume
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+
+                        remoteVideo.play().then(() => {
+                            console.log('✓ Video playback started');
+                            console.log('Video element - muted:', remoteVideo.muted, 'volume:', remoteVideo.volume);
+
+                            // Check audio tracks
+                            const audioTracks = event.streams[0].getAudioTracks();
+                            console.log('Audio tracks:', audioTracks.length);
+                            audioTracks.forEach((track, idx) => {
+                                console.log(`Audio track ${idx}:`, {
+                                    id: track.id,
+                                    label: track.label,
+                                    enabled: track.enabled,
+                                    muted: track.muted,
+                                    readyState: track.readyState
+                                });
+                            });
+
+                            statusEl.textContent = 'Streaming (Video + Audio)';
+                        }).catch(e => console.error('Play failed:', e));
+                    }
                 }
             };
 
-            // Your oniceconnectionstatechange logic is UNCHANGED.
             peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
                     statusEl.textContent = 'Streaming (Video + Audio)';
                 }
             };
-            
-            // Your onicecandidate logic is UNCHANGED.
+
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    sendMessage({ type: 'ice_candidate', candidate: event.candidate.candidate, sdpMid: event.candidate.sdpMid, sdpMLineIndex: event.candidate.sdpMLineIndex });
+                    sendMessage({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    });
                 }
             };
 
-            // Your SDP negotiation logic is UNCHANGED.
-            await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+            console.log('Remote description set');
+
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
+            console.log('Answer created');
+
             sendMessage({ type: 'answer', sdp: answer.sdp });
 
-            // YOUR SETTIMEOUT IS UNCHANGED.
             setTimeout(() => {
                 const receivers = peerConnection.getReceivers();
                 console.log('Total receivers:', receivers.length);
-                receivers.forEach((receiver) => {
+                receivers.forEach((receiver, index) => {
                     if (receiver.track) {
-                        console.log(`Receiver:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                        console.log(`Receiver ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState, 'enabled:', receiver.track.enabled);
                     }
                 });
             }, 1500);
 
         } catch (e) {
             console.error('Offer handling error:', e);
+            statusEl.textContent = 'Error: ' + e.message;
         }
     }
 
     async function handleIceCandidate(data) {
         try {
             if (peerConnection && data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: data.candidate, sdpMid: data.sdpMid, sdpMLineIndex: data.sdpMLineIndex }));
+                await peerConnection.addIceCandidate(new RTCIceCandidate({
+                    candidate: data.candidate,
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex
+                }));
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error('ICE candidate error:', e);
+        }
     }
 
     function sendMessage(messageObject) {
         try {
             const messageStr = JSON.stringify(messageObject);
             context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-        } catch (e) {}
+        } catch (e) {
+            console.error('Send message error:', e);
+        }
     }
 </script>
 </body>
