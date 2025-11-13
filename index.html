@@ -117,63 +117,43 @@
     }
 
     function handleAudioData(data) {
+    if (!audioContext) {
+        initializeAudioContext();
         if (!audioContext) {
-            console.warn('AudioContext not initialized, initializing now...');
-            initializeAudioContext();
-            if (!audioContext) {
-                console.error('Failed to initialize AudioContext');
-                return;
-            }
-        }
-
-        try {
-            // Decode base64 audio data
-            const binaryString = atob(data.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            // Convert PCM bytes to Float32Array
-            const int16Array = new Int16Array(bytes.buffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
-            }
-
-            // Split stereo data into left and right channels
-            const channels = data.channels || 2;
-            const samplesPerChannel = float32Array.length / channels;
-
-            // Create AudioBuffer
-            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
-
-            if (channels === 2) {
-                const leftChannel = audioBuffer.getChannelData(0);
-                const rightChannel = audioBuffer.getChannelData(1);
-                for (let i = 0; i < samplesPerChannel; i++) {
-                    leftChannel[i] = float32Array[i * 2];
-                    rightChannel[i] = float32Array[i * 2 + 1];
-                }
-            } else {
-                const channelData = audioBuffer.getChannelData(0);
-                for (let i = 0; i < samplesPerChannel; i++) {
-                    channelData[i] = float32Array[i];
-                }
-            }
-
-            playAudioBuffer(audioBuffer);
-
-            // Log occasionally to confirm audio is being received
-            if (!window.audioPacketCount) window.audioPacketCount = 0;
-            window.audioPacketCount++;
-            if (window.audioPacketCount % 100 === 0) {
-                console.log('✓ System audio packets received:', window.audioPacketCount);
-            }
-        } catch (e) {
-            console.error('Error processing audio data:', e);
+            console.error('Failed to initialize AudioContext');
+            return;
         }
     }
+
+    try {
+        const binaryString = atob(data.data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        const int16Array = new Int16Array(bytes.buffer);
+        const float32Array = new Float32Array(int16Array.length);
+        for (let i = 0; i < int16Array.length; i++) {
+            float32Array[i] = int16Array[i] / 32768.0;
+        }
+
+        // ===================================================================
+        // THIS IS THE CORRECTED MONO LOGIC
+        // ===================================================================
+        const channels = 1; // It's now mono
+        const sampleRate = data.sampleRate || 24000; // Use sample rate from sender
+        const audioBuffer = audioContext.createBuffer(channels, float32Array.length, sampleRate);
+
+        // Copy the audio data to the buffer's single channel
+        audioBuffer.getChannelData(0).set(float32Array);
+        // ===================================================================
+
+        playAudioBuffer(audioBuffer);
+    } catch (e) {
+        console.error('Error processing audio data:', e);
+    }
+}
 
     function playAudioBuffer(audioBuffer) {
         const source = audioContext.createBufferSource();
@@ -330,3 +310,4 @@
 </script>
 </body>
 </html>
+
