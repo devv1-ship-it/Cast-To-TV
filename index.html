@@ -1,397 +1,334 @@
-package com.xxx.screenmirroring.service
-
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Intent
-import android.media.projection.MediaProjection
-import android.net.wifi.WifiManager
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
-import android.os.PowerManager
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
-import android.util.Base64
-import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.media.MediaBrowserServiceCompat
-import com.google.android.gms.cast.framework.CastContext
-import com.google.android.gms.cast.framework.CastSession
-import com.xxx.screenmirroring.R
-import org.json.JSONObject
-import org.webrtc.*
-import org.webrtc.audio.JavaAudioDeviceModule
-
-class ScreenCaptureServiceWebRTC : MediaBrowserServiceCompat() {
-
-    private var mediaSession: MediaSessionCompat? = null
-    private lateinit var stateBuilder: PlaybackStateCompat.Builder
-
-    private var castSession: CastSession? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var rootEglBase: EglBase? = null
-
-    // WebRTC components
-    private var peerConnectionFactory: PeerConnectionFactory? = null
-    private var peerConnection: PeerConnection? = null
-    private var videoCapturer: VideoCapturer? = null
-    private var videoSource: VideoSource? = null
-    private var localVideoTrack: VideoTrack? = null
-    private var audioSource: AudioSource? = null
-    private var localAudioTrack: AudioTrack? = null
-    private var systemAudioCapturer: SystemAudioCapturer? = null
-    private var audioDeviceModule: JavaAudioDeviceModule? = null
-
-    // Background reliability
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
-
-    @Volatile
-    private var isStreaming = false
-
-    companion object {
-        private const val TAG = "ScreenCaptureWebRTC"
-        private const val MEDIA_SESSION_TAG = "ScreenMirroringSession"
-        private const val ROOT_ID = "mirroring_root_id"
-        private const val NOTIFICATION_ID = 1005
-        private const val CHANNEL_ID = "webrtc_mirroring_channel"
-        const val EXTRA_RESULT_CODE = "result_code"
-        const val EXTRA_DATA = "data"
-        const val ACTION_STOP_CAST = "ACTION_STOP_CAST"
-        private const val CAST_NAMESPACE = "urn:x-cast:com.xxx.screenmirroring"
-        private const val VIDEO_WIDTH = 1280
-        private const val VIDEO_HEIGHT = 720
-        private const val VIDEO_FPS = 30
-    }
-
-    override fun onBind(intent: Intent?): IBinder? { return super.onBind(intent) }
-
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        // EglBase is created here, only once. We revert the previous change.
-        rootEglBase = EglBase.create()
-        acquireLocks()
-        mediaSession = MediaSessionCompat(this, MEDIA_SESSION_TAG)
-        mediaSession?.setFlags(
-            MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
-                    MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-        )
-        stateBuilder = PlaybackStateCompat.Builder().setActions(PlaybackStateCompat.ACTION_STOP)
-        mediaSession?.setPlaybackState(stateBuilder.build())
-        mediaSession?.setCallback(MediaSessionCallback())
-        sessionToken = mediaSession?.sessionToken
-        mediaSession?.isActive = true
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP_CAST) {
-            stopCapture()
-            return START_NOT_STICKY
+<!--THIS FILE IS UPLOADED TO SERVER AND PUBLISHED-->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC Screen Mirroring</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
         }
-        if (isStreaming) return START_STICKY
-
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
-        val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra(EXTRA_DATA, Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra(EXTRA_DATA)
+        #remoteVideo {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            background: #000;
         }
-        if (resultCode != 0 && data != null) {
-            initializeCastSession()
-            if (castSession?.isConnected == true) {
-                startStreaming(resultCode, data)
-            } else { stopCapture() }
-        } else { stopCapture() }
-        return START_STICKY
-    }
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 1.2em;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+<div id="status">Connecting...</div>
+<video id="remoteVideo" autoplay playsinline muted="false"></video>
 
-    private fun startStreaming(resultCode: Int, data: Intent) {
-        if (isStreaming) return
-        isStreaming = true
-        mediaSession?.setPlaybackState(
-            stateBuilder.setState(PlaybackStateCompat.STATE_PLAYING, 0, 1.0f).build()
-        )
-        startForeground(NOTIFICATION_ID, buildMediaNotification())
-        startWebRTCCapture(resultCode, data)
-    }
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+    const statusEl = document.getElementById('status');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+    let peerConnection = null;
+    let context = null;
 
-    private fun initializeWebRTC() {
-        val initOptions = PeerConnectionFactory.InitializationOptions.builder(this).createInitializationOptions()
-        PeerConnectionFactory.initialize(initOptions)
+    // Ensure video is not muted
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
 
-        audioDeviceModule = JavaAudioDeviceModule.builder(this)
-            .setUseHardwareAcousticEchoCanceler(false)
-            .setUseHardwareNoiseSuppressor(false)
-            .createAudioDeviceModule()
+    // Audio playback components
+    let audioContext = null;
+    let audioQueue = [];
+    let isPlayingAudio = false;
+    let nextPlayTime = 0;
 
-        val encoderFactory = DefaultVideoEncoderFactory(rootEglBase!!.eglBaseContext, true, true)
-        val decoderFactory = DefaultVideoDecoderFactory(rootEglBase!!.eglBaseContext)
+    try {
+        context = cast.framework.CastReceiverContext.getInstance();
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600;
 
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setAudioDeviceModule(audioDeviceModule)
-            .setVideoEncoderFactory(encoderFactory)
-            .setVideoDecoderFactory(decoderFactory)
-            .createPeerConnectionFactory()
-    }
-
-    private fun startWebRTCCapture(resultCode: Int, data: Intent) {
-        try {
-            initializeWebRTC()
-
-            val customCapturer = CustomScreenCapturer(data, object : MediaProjection.Callback() {
-                override fun onStop() {
-                    mainHandler.post { stopCapture() }
+        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+            try {
+                console.log('<-- Received custom message from sender:', customEvent.data);
+                let data = customEvent.data;
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
                 }
-            })
-            videoCapturer = customCapturer
 
-            videoSource = peerConnectionFactory?.createVideoSource(videoCapturer!!.isScreencast)
-            localVideoTrack = peerConnectionFactory?.createVideoTrack("video_track", videoSource)
+                if (data.type === 'offer') {
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    handleIceCandidate(data);
+                } else if (data.type === 'audio') {
+                    handleAudioData(data);
+                }
+            } catch (e) {
+                console.error('Message processing error:', e);
+            }
+        });
 
-            val surfaceTextureHelper = SurfaceTextureHelper.create("VideoCapturerThread", rootEglBase!!.eglBaseContext)
-            videoCapturer?.initialize(surfaceTextureHelper, this, videoSource?.capturerObserver)
-            videoCapturer?.startCapture(VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS)
+        context.addEventListener(cast.framework.system.EventType.READY, () => {
+            statusEl.textContent = 'Ready';
+            console.log('Receiver ready');
+            initializeAudioContext();
+        });
 
-            audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
-            localAudioTrack = peerConnectionFactory?.createAudioTrack("audio_track", audioSource)
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
+            statusEl.textContent = 'Connected - Waiting for stream...';
+            console.log('Sender connected:', event.senderId);
+        });
 
-            mainHandler.postDelayed({
-                val projection = customCapturer.mediaProjection
-                if (projection != null) {
-                    systemAudioCapturer = SystemAudioCapturer(projection)
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            statusEl.textContent = 'Disconnected';
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            stopAudioPlayback();
+        });
 
-                    // =============================================================
-                    // FIX #1: CAPTURED AUDIO IS NOW SENT TO THE RECEIVER
-                    // =============================================================
-                    systemAudioCapturer?.setAudioDataCallback { bytes, size ->
-                        sendAudioDataToReceiver(bytes, size)
+        context.start(castReceiverOptions);
+
+    } catch (e) {
+        console.error('Init error:', e);
+        statusEl.textContent = 'Error: ' + e.message;
+    }
+
+    function initializeAudioContext() {
+        try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 48000,
+                latencyHint: 'interactive'
+            });
+            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
+        } catch (e) {
+            console.error('Failed to initialize AudioContext:', e);
+        }
+    }
+
+    function handleAudioData(data) {
+        console.log('handleAudioData called. Packet size (base64):', data.data ? data.data.length : 'N/A');
+        if (!audioContext) {
+            console.warn('AudioContext not initialized, initializing now...');
+            initializeAudioContext();
+            if (!audioContext) {
+                console.error('Failed to initialize AudioContext');
+                return;
+            }
+        }
+
+        try {
+            // Decode base64 audio data
+            const binaryString = atob(data.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Convert PCM bytes to Float32Array
+            const int16Array = new Int16Array(bytes.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
+            }
+
+            // Split stereo data into left and right channels
+            const channels = data.channels || 2;
+            const samplesPerChannel = float32Array.length / channels;
+
+            // Create AudioBuffer
+            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
+
+            if (channels === 2) {
+                const leftChannel = audioBuffer.getChannelData(0);
+                const rightChannel = audioBuffer.getChannelData(1);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    leftChannel[i] = float32Array[i * 2];
+                    rightChannel[i] = float32Array[i * 2 + 1];
+                }
+            } else {
+                const channelData = audioBuffer.getChannelData(0);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    channelData[i] = float32Array[i];
+                }
+            }
+
+            playAudioBuffer(audioBuffer);
+
+            // Log occasionally to confirm audio is being received
+            if (!window.audioPacketCount) window.audioPacketCount = 0;
+            window.audioPacketCount++;
+            if (window.audioPacketCount % 100 === 0) {
+                console.log('✓ System audio packets received:', window.audioPacketCount);
+            }
+        } catch (e) {
+            console.error('Error processing audio data:', e);
+        }
+    }
+
+    function playAudioBuffer(audioBuffer) {
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+
+        // Schedule playback
+        const currentTime = audioContext.currentTime;
+        if (nextPlayTime < currentTime) {
+            nextPlayTime = currentTime;
+        }
+
+        source.start(nextPlayTime);
+        nextPlayTime += audioBuffer.duration;
+    }
+
+    function stopAudioPlayback() {
+        audioQueue = [];
+        isPlayingAudio = false;
+        nextPlayTime = 0;
+        if (audioContext) {
+            try {
+                audioContext.close();
+                audioContext = null;
+            } catch (e) {
+                console.error('Error closing AudioContext:', e);
+            }
+        }
+    }
+
+    async function handleOffer(data) {
+        try {
+            console.log('Handling offer');
+
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            };
+            peerConnection = new RTCPeerConnection(configuration);
+
+            let streamSet = false;
+
+            peerConnection.ontrack = (event) => {
+                console.log('Track received:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
+
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting video stream with', event.streams[0].getTracks().length, 'tracks');
+
+                        // Log all tracks
+                        event.streams[0].getTracks().forEach(track => {
+                            console.log('Stream track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                        });
+
+                        remoteVideo.srcObject = event.streams[0];
+                        streamSet = true;
+
+                        // Ensure video is not muted and has volume
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+
+                        remoteVideo.play().then(() => {
+                            console.log('✓ Video playback started');
+                            console.log('Video element - muted:', remoteVideo.muted, 'volume:', remoteVideo.volume);
+
+                            // Check audio tracks
+                            const audioTracks = event.streams[0].getAudioTracks();
+                            console.log('Audio tracks:', audioTracks.length);
+                            audioTracks.forEach((track, idx) => {
+                                console.log(`Audio track ${idx}:`, {
+                                    id: track.id,
+                                    label: track.label,
+                                    enabled: track.enabled,
+                                    muted: track.muted,
+                                    readyState: track.readyState
+                                });
+                            });
+
+                            statusEl.textContent = 'Streaming (Video + Audio)';
+                        }).catch(e => console.error('Play failed:', e));
                     }
+                }
+            };
 
-                    if (systemAudioCapturer?.startRecording() != true) {
-                        Log.e(TAG, "✗✗✗ FAILED to start system audio recording!")
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + Audio)';
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendMessage({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    });
+                }
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+            console.log('Remote description set');
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            console.log('Answer created');
+
+            sendMessage({ type: 'answer', sdp: answer.sdp });
+
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Total receivers:', receivers.length);
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`Receiver ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState, 'enabled:', receiver.track.enabled);
                     }
-                } else {
-                    Log.e(TAG, "FATAL: Could not get MediaProjection for audio.")
-                }
-            }, 500)
+                });
+            }, 1500);
 
-            setupPeerConnection()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start WebRTC capture", e)
-            stopCapture()
+        } catch (e) {
+            console.error('Offer handling error:', e);
+            statusEl.textContent = 'Error: ' + e.message;
         }
     }
 
-    private fun setupPeerConnection() {
-        val iceServers = listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
-        peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onIceCandidate(candidate: IceCandidate?) { candidate?.let { sendIceCandidateToReceiver(it) } }
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) { Log.d(TAG, "ICE State: $state") }
-            override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
-            override fun onDataChannel(p0: DataChannel?) {}
-            override fun onIceConnectionReceivingChange(p0: Boolean) {}
-            override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
-            override fun onAddStream(p0: MediaStream?) {}
-            override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
-            override fun onRemoveStream(p0: MediaStream?) {}
-            override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
-        })
-        localVideoTrack?.let { peerConnection?.addTrack(it, listOf("stream1")) }
-        localAudioTrack?.let { peerConnection?.addTrack(it, listOf("stream1")) }
-
-        // ===================================================================
-        // FIX #2: THE MICROPHONE TRACK IS ADDED, THEN DISABLED (MUTED)
-        // This keeps the negotiation happy while sending no mic data.
-        // ===================================================================
-        localAudioTrack?.setEnabled(false)
-
-        createOffer()
-    }
-
-    fun stopCapture() {
-        if (!isStreaming) return
-        isStreaming = false
-        Log.d(TAG, "Stopping WebRTC capture...")
-
-        mainHandler.removeCallbacksAndMessages(null)
-        videoCapturer?.stopCapture(); videoCapturer?.dispose(); videoCapturer = null
-        systemAudioCapturer?.stopRecording(); systemAudioCapturer = null
-        peerConnection?.close(); peerConnection = null // dispose is called internally
-        localVideoTrack?.dispose(); videoSource?.dispose()
-        localAudioTrack?.dispose(); audioSource?.dispose()
-        audioDeviceModule?.release(); audioDeviceModule = null
-        peerConnectionFactory?.dispose(); peerConnectionFactory = null
-
-        // We DO NOT release the rootEglBase here, so it can be reused if the service is still alive.
-
-        mediaSession?.setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f).build())
-        mediaSession?.isActive = false
-        stopForeground(true)
-        stopSelf()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        stopCapture()
-        // rootEglBase is only released when the entire service is destroyed.
-        rootEglBase?.release()
-        rootEglBase = null
-        releaseLocks()
-        mediaSession?.release()
-    }
-
-    // ... (MediaSession, onTaskRemoved boilerplate remain the same) ...
-
-    // ===================================================================
-    // FIX #3: NEW FUNCTION TO SEND AUDIO DATA TO THE RECEIVER
-    // This runs on the main thread to avoid crashes.
-    // ===================================================================
-    private fun sendAudioDataToReceiver(bytes: ByteArray, size: Int) {
-        mainHandler.post {
-            if (castSession == null || !isStreaming) {
-                return@post
-            }
-            try {
-                val audioData = bytes.copyOf(size)
-                val base64Audio = Base64.encodeToString(audioData, Base64.NO_WRAP)
-
-                val message = JSONObject().apply {
-                    put("type", "audio")
-                    put("data", base64Audio)
-                    put("sampleRate", SystemAudioCapturer.SAMPLE_RATE)
-                    put("channels", 2)
-                }
-                castSession?.sendMessage(CAST_NAMESPACE, message.toString())
-            } catch (e: Exception) {
-                // Log.e(TAG, "Failed to send audio data", e) // Avoid log spam
-            }
-        }
-    }
-
-    // ... (The rest of the file - signaling, notifications, etc. - can remain exactly as it was in your original file) ...
-    private inner class MediaSessionCallback : MediaSessionCompat.Callback() {
-        override fun onStop() { stopCapture() }
-    }
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        super.onTaskRemoved(rootIntent)
-        stopCapture()
-    }
-    override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot? { return BrowserRoot(ROOT_ID, null) }
-    override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) { result.sendResult(null) }
-    private fun initializeCastSession() {
-        castSession = CastContext.getSharedInstance(this).sessionManager.currentCastSession
-        if (castSession == null || !castSession!!.isConnected) { stopCapture(); return }
+    async function handleIceCandidate(data) {
         try {
-            castSession?.setMessageReceivedCallbacks(CAST_NAMESPACE) { _, _, message ->
-                handleReceiverMessage(message)
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate({
+                    candidate: data.candidate,
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex
+                }));
             }
-        } catch (e: Exception) { Log.e(TAG, "Failed to set message callbacks", e) }
-    }
-    private fun createOffer() {
-        peerConnection?.createOffer(object : SdpObserver {
-            override fun onCreateSuccess(sdp: SessionDescription?) {
-                sdp?.let {
-                    peerConnection?.setLocalDescription(object : SdpObserver {
-                        override fun onSetSuccess() { sendOfferToReceiver(it) }
-                        override fun onSetFailure(error: String?) { Log.e(TAG, "Failed to set local desc: $error") }
-                        override fun onCreateSuccess(p0: SessionDescription?) {}
-                        override fun onCreateFailure(p0: String?) {}
-                    }, it)
-                }
-            }
-            override fun onCreateFailure(error: String?) { Log.e(TAG, "Failed to create offer: $error") }
-            override fun onSetSuccess() {}
-            override fun onSetFailure(p0: String?) {}
-        }, MediaConstraints())
-    }
-    private fun handleReceiverMessage(message: String) {
-        try {
-            val json = JSONObject(message)
-            when (json.getString("type")) {
-                "answer" -> {
-                    val sdp = json.getString("sdp")
-                    peerConnection?.setRemoteDescription(object : SdpObserver {
-                        override fun onSetSuccess() { Log.d(TAG, "✓ Remote desc (answer) set") }
-                        override fun onSetFailure(error: String?) { Log.e(TAG, "✗ Failed to set remote desc: $error") }
-                        override fun onCreateSuccess(p0: SessionDescription?) {}
-                        override fun onCreateFailure(p0: String?) {}
-                    }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
-                }
-                "ice_candidate" -> {
-                    val candidate = IceCandidate(json.getString("sdpMid"), json.getInt("sdpMLineIndex"), json.getString("candidate"))
-                    peerConnection?.addIceCandidate(candidate)
-                }
-            }
-        } catch (e: Exception) { Log.e(TAG, "Error handling receiver message", e) }
-    }
-    private fun sendOfferToReceiver(sdp: SessionDescription) {
-        mainHandler.post {
-            try {
-                val message = JSONObject().apply { put("type", "offer"); put("sdp", sdp.description) }
-                castSession?.sendMessage(CAST_NAMESPACE, message.toString())
-            } catch (e: Exception) { Log.e(TAG, "Failed to send offer", e) }
+        } catch (e) {
+            console.error('ICE candidate error:', e);
         }
     }
-    private fun sendIceCandidateToReceiver(candidate: IceCandidate) {
-        mainHandler.post {
-            try {
-                val message = JSONObject().apply {
-                    put("type", "ice_candidate")
-                    put("candidate", candidate.sdp)
-                    put("sdpMid", candidate.sdpMid)
-                    put("sdpMLineIndex", candidate.sdpMLineIndex)
-                }
-                castSession?.sendMessage(CAST_NAMESPACE, message.toString())
-            } catch (e: Exception) { Log.e(TAG, "Failed to send ICE candidate", e) }
+
+    function sendMessage(messageObject) {
+        try {
+            const messageStr = JSON.stringify(messageObject);
+            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
+        } catch (e) {
+            console.error('Send message error:', e);
         }
     }
-    private fun acquireLocks() {
-        try {
-            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ScreenMirroring::WakeLock")
-            wakeLock?.setReferenceCounted(false)
-            wakeLock?.acquire(2 * 60 * 60 * 1000L)
-            val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-            wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ScreenMirroring::WifiLock")
-            wifiLock?.acquire()
-        } catch (e: Exception) { Log.e(TAG, "Error acquiring locks", e) }
-    }
-    private fun releaseLocks() {
-        try {
-            if (wakeLock?.isHeld == true) wakeLock?.release()
-            if (wifiLock?.isHeld == true) wifiLock?.release()
-        } catch (e: Exception) { Log.e(TAG, "Error releasing locks", e) }
-    }
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "WebRTC Screen Mirroring", NotificationManager.IMPORTANCE_DEFAULT)
-            channel.description = "Active screen mirroring session"
-            channel.setSound(null, null)
-            channel.setShowBadge(false)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
-    }
-    private fun buildMediaNotification(): Notification {
-        val stopIntent = Intent(this, ScreenCaptureServiceWebRTC::class.java).apply { action = ACTION_STOP_CAST }
-        val stopPendingIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return NotificationCompat.Builder(this, CHANNEL_ID).apply {
-            setContentTitle("Screen Mirroring Active")
-            setContentText("Casting to ${castSession?.castDevice?.friendlyName ?: "TV"}")
-            setSmallIcon(R.mipmap.ic_launcher)
-            setStyle(androidx.media.app.NotificationCompat.MediaStyle()
-                .setMediaSession(mediaSession?.sessionToken)
-                .setShowActionsInCompactView(0))
-            addAction(R.drawable.ic_stop, "Stop", stopPendingIntent)
-            setOngoing(true)
-        }.build()
-    }
-}
+</script>
+</body>
+</html>
