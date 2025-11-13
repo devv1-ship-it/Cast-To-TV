@@ -1,32 +1,12 @@
-<!--THIS FILE IS UPLOADED TO SERVER AND PUBLISHED-->
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <title>WebRTC Screen Mirroring</title>
     <style>
-        body {
-            margin: 0;
-            background-color: #000;
-            color: white;
-            font-family: Arial, sans-serif;
-        }
-        #remoteVideo {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-            background: #000;
-        }
-        #status {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            font-size: 1.2em;
-            background: rgba(0,0,0,0.7);
-            padding: 10px 15px;
-            border-radius: 5px;
-            z-index: 100;
-        }
+        body { margin: 0; background-color: #000; color: white; font-family: Arial, sans-serif; }
+        #remoteVideo { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+        #status { position: absolute; top: 20px; left: 20px; font-size: 1.2em; background: rgba(0,0,0,0.7); padding: 10px 15px; border-radius: 5px; z-index: 100; }
     </style>
 </head>
 <body>
@@ -44,10 +24,7 @@
     remoteVideo.muted = false;
     remoteVideo.volume = 1.0;
 
-    // ===================================================================
-    // START: JITTER BUFFER FOR SMOOTH AUDIO
-    // This logic is self-contained and will fix the stuttering and crackling.
-    // ===================================================================
+    // --- JITTER BUFFER FOR SMOOTH AUDIO ---
     let audioContext = null;
     const audioQueue = [];
     let isPlayingAudio = false;
@@ -80,7 +57,7 @@
 
     // This function is now called by the DataChannel's onmessage event.
     async function onAudioDataReceived(arrayBuffer) {
-        if (!audioContext) initializeAudioContext(24000); // Default to 24kHz if not ready
+        if (!audioContext) initializeAudioContext(24000); // Default to our known sample rate
         if (!audioContext) return;
 
         try {
@@ -105,15 +82,9 @@
         isPlayingAudio = false;
         nextPlayTime = 0;
         if (audioContext) {
-            try {
-                audioContext.close();
-                audioContext = null;
-            } catch (e) { console.error('Error closing AudioContext:', e); }
+            try { audioContext.close(); audioContext = null; } catch (e) {}
         }
     }
-    // ===================================================================
-    // END: JITTER BUFFER IMPLEMENTATION
-    // ===================================================================
 
     // --- YOUR CONNECTION LOGIC (UNCHANGED, BUT WITH DATACHANNEL ADDED) ---
     try {
@@ -122,26 +93,20 @@
         castReceiverOptions.disableIdleTimeout = true;
         castReceiverOptions.maxInactivity = 3600;
 
-        // The custom message listener is now only for signaling
+        // The message listener is now only for signaling (offer/ice_candidate)
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
-                let data = customEvent.data;
-                if (typeof data === 'string') { data = JSON.parse(data); }
+                let data = JSON.parse(customEvent.data);
                 if (data.type === 'offer') {
                     handleOffer(data);
                 } else if (data.type === 'ice_candidate') {
                     handleIceCandidate(data);
                 }
-                // The 'audio' type is no longer handled here.
-            } catch (e) {
-                console.error('Message processing error:', e);
-            }
+            } catch (e) {}
         });
 
-        // Your event listeners are UNCHANGED
         context.addEventListener(cast.framework.system.EventType.READY, () => {
             statusEl.textContent = 'Ready';
-            console.log('Receiver ready');
         });
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
             statusEl.textContent = 'Connected - Waiting for stream...';
@@ -150,23 +115,20 @@
             statusEl.textContent = 'Disconnected';
             if (peerConnection) peerConnection.close();
             remoteVideo.srcObject = null;
-            stopAudioPlayback(); // We call our stop function here
+            stopAudioPlayback();
         });
         context.start(castReceiverOptions);
     } catch (e) {
-        console.error('Init error:', e);
+        statusEl.textContent = 'Error: ' + e.message;
     }
 
     async function handleOffer(data) {
-        // This function is exactly as you provided it, with ONE addition.
         try {
             console.log('Handling offer');
             const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' };
             peerConnection = new RTCPeerConnection(configuration);
 
-            // ===================================================================
             // THE ONLY ADDITION: We tell the connection to listen for the DataChannel.
-            // ===================================================================
             peerConnection.ondatachannel = (event) => {
                 const receiveChannel = event.channel;
                 console.log('>>> Audio DataChannel received:', receiveChannel.label);
@@ -175,7 +137,6 @@
                     onAudioDataReceived(messageEvent.data);
                 };
             };
-            // ===================================================================
 
             // Your ontrack logic is UNCHANGED.
             let streamSet = false;
@@ -224,24 +185,18 @@
     }
 
     async function handleIceCandidate(data) {
-        // This function is exactly as you provided. It is not changed.
         try {
             if (peerConnection && data.candidate) {
                 await peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: data.candidate, sdpMid: data.sdpMid, sdpMLineIndex: data.sdpMLineIndex }));
             }
-        } catch (e) {
-            console.error('ICE candidate error:', e);
-        }
+        } catch (e) {}
     }
 
     function sendMessage(messageObject) {
-        // This function is exactly as you provided. It is not changed.
         try {
             const messageStr = JSON.stringify(messageObject);
             context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-        } catch (e) {
-            console.error('Send message error:', e);
-        }
+        } catch (e) {}
     }
 </script>
 </body>
