@@ -50,7 +50,7 @@
     let audioQueue = [];
     let isPlayingAudio = false;
     let nextPlayTime = 0;
-
+    
     try {
         context = cast.framework.CastReceiverContext.getInstance();
         const castReceiverOptions = new cast.framework.CastReceiverOptions();
@@ -104,25 +104,34 @@
         statusEl.textContent = 'Error: ' + e.message;
     }
 
-    function initializeAudioContext() {
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 48000,
-                latencyHint: 'interactive'
-            });
-            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
-        } catch (e) {
-            console.error('Failed to initialize AudioContext:', e);
-        }
+    function initializeAudioContext(sampleRate) {
+    if (audioContext && audioContext.sampleRate === sampleRate) {
+        return; 
     }
+    if (audioContext) {
+        audioContext.close();
+    }
+    
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: sampleRate, // Use the rate the sender specified
+            latencyHint: 'interactive'
+        });
+        console.log('✓ AudioContext initialized at:', audioContext.sampleRate, 'Hz');
+    } catch (e) {
+        console.error('Failed to initialize AudioContext:', e);
+    }
+}
 
     function handleAudioData(data) {
+    // Get the sample rate from the message, defaulting to 24000
+    const sampleRate = data.sampleRate || 24000;
+
+    // Ensure the audio context is initialized with the correct rate
+    initializeAudioContext(sampleRate);
     if (!audioContext) {
-        initializeAudioContext();
-        if (!audioContext) {
-            console.error('Failed to initialize AudioContext');
-            return;
-        }
+        console.error('Failed to get AudioContext');
+        return;
     }
 
     try {
@@ -138,37 +147,32 @@
             float32Array[i] = int16Array[i] / 32768.0;
         }
 
-        // ===================================================================
-        // THIS IS THE CORRECTED MONO LOGIC
-        // ===================================================================
-        const channels = 1; // It's now mono
-        const sampleRate = data.sampleRate || 24000; // Use sample rate from sender
+        const channels = 1; // It's mono
+        // Use the same sampleRate variable when creating the buffer
         const audioBuffer = audioContext.createBuffer(channels, float32Array.length, sampleRate);
 
-        // Copy the audio data to the buffer's single channel
         audioBuffer.getChannelData(0).set(float32Array);
-        // ===================================================================
-
+        
         playAudioBuffer(audioBuffer);
+
     } catch (e) {
         console.error('Error processing audio data:', e);
     }
 }
 
     function playAudioBuffer(audioBuffer) {
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioContext.destination);
 
-        // Schedule playback
-        const currentTime = audioContext.currentTime;
-        if (nextPlayTime < currentTime) {
-            nextPlayTime = currentTime;
-        }
-
-        source.start(nextPlayTime);
-        nextPlayTime += audioBuffer.duration;
+    // This scheduling logic helps smooth out playback
+    const currentTime = audioContext.currentTime;
+    if (nextPlayTime < currentTime) {
+        nextPlayTime = currentTime;
     }
+    source.start(nextPlayTime);
+    nextPlayTime += audioBuffer.duration;
+}
 
     function stopAudioPlayback() {
         audioQueue = [];
@@ -310,4 +314,5 @@
 </script>
 </body>
 </html>
+
 
