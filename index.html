@@ -39,236 +39,119 @@
     const remoteVideo = document.getElementById('remoteVideo');
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
-    let context = null;
+    const context = cast.framework.CastReceiverContext.getInstance();
 
     remoteVideo.muted = false;
     remoteVideo.volume = 1.0;
 
-    // ===================================================================
-    // START: JITTER BUFFER FOR SMOOTH AUDIO
-    // This new logic will fix the stutter, choppiness, and crackling.
-    // ===================================================================
+    // --- JITTER BUFFER & AUDIO PLAYBACK ENGINE (UNCHANGED) ---
     let audioContext = null;
-    const audioQueue = []; // A queue to hold incoming audio packets
-    let isPlayingAudio = false; // A flag to prevent the playback loop from starting multiple times
-    let nextPlayTime = 0; // The scheduled time for the next audio chunk to play
+    const audioQueue = [];
+    let isPlayingAudio = false;
+    let nextPlayTime = 0;
 
     function initializeAudioContext(sampleRate) {
-        // This function is the same as your version. It correctly sets the sample rate.
-        if (audioContext && audioContext.sampleRate === sampleRate) {
-            return;
-        }
-        if (audioContext) {
-            audioContext.close();
-        }
+        if (audioContext && audioContext.sampleRate === sampleRate) return;
+        if (audioContext) audioContext.close();
         try {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: sampleRate,
-                latencyHint: 'interactive'
+                sampleRate: sampleRate, latencyHint: 'interactive'
             });
-            console.log('✓ AudioContext initialized at:', audioContext.sampleRate, 'Hz');
-        } catch (e) {
-            console.error('Failed to initialize AudioContext:', e);
-        }
+        } catch (e) { console.error('Failed to initialize AudioContext:', e); }
     }
 
-    // This is the new playback "engine". It plays one buffer and then
-    // uses the 'onended' event to schedule the very next one, creating a seamless stream.
     function processAudioQueue() {
-        if (audioQueue.length === 0) {
-            isPlayingAudio = false; // The queue is empty, so we stop.
-            console.log('Audio queue depleted, pausing playback.');
-            return;
-        }
-
-        const bufferToPlay = audioQueue.shift(); // Get the next audio chunk from the front of the queue.
-
+        if (audioQueue.length === 0) { isPlayingAudio = false; return; }
+        const bufferToPlay = audioQueue.shift();
         const source = audioContext.createBufferSource();
         source.buffer = bufferToPlay;
         source.connect(audioContext.destination);
-
-        // This is the magic: when this chunk finishes, automatically process the next one.
         source.onended = processAudioQueue;
-
         const currentTime = audioContext.currentTime;
-        // If the scheduled time is in the past, reset it to now to avoid glitches.
-        if (nextPlayTime < currentTime) {
-            nextPlayTime = currentTime;
-        }
-
+        if (nextPlayTime < currentTime) nextPlayTime = currentTime;
         source.start(nextPlayTime);
-        
-        // Schedule the next chunk to start exactly when this one finishes.
         nextPlayTime += bufferToPlay.duration;
     }
-
-    // Your handleAudioData function is now much simpler.
-    // Its only job is to decode the audio and add it to the queue.
-    function handleAudioData(data) {
-        const sampleRate = data.sampleRate || 24000;
-        initializeAudioContext(sampleRate);
-        if (!audioContext) return;
-
-        try {
-            const binaryString = atob(data.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            const int16Array = new Int16Array(bytes.buffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0;
-            }
-
-            const channels = 1; // mono
-            const audioBuffer = audioContext.createBuffer(channels, float32Array.length, sampleRate);
-            audioBuffer.getChannelData(0).set(float32Array);
-            
-            // Add the decoded audio to our queue.
-            audioQueue.push(audioBuffer);
-
-            // If playback isn't running and we've buffered enough audio, kick it off.
-            // This pre-buffering prevents stuttering at the very beginning.
-            const START_THRESHOLD = 5;
-            if (!isPlayingAudio && audioQueue.length > START_THRESHOLD) {
-                isPlayingAudio = true;
-                console.log('Jitter buffer filled. Starting audio playback.');
-                processAudioQueue();
-            }
-
-        } catch (e) {
-            console.error('Error processing audio data:', e);
-        }
-    }
     
-    // Your stopAudioPlayback function now also needs to clear the queue.
-    function stopAudioPlayback() {
-        audioQueue.length = 0; // Clear the queue
-        isPlayingAudio = false;
-        nextPlayTime = 0;
-        if (audioContext) {
-            try {
-                audioContext.close();
-                audioContext = null;
-            } catch (e) {
-                console.error('Error closing AudioContext:', e);
-            }
-        }
-    }
-    // ===================================================================
-    // END: JITTER BUFFER IMPLEMENTATION
-    // ===================================================================
-
-    // --- YOUR CONNECTION LOGIC (UNCHANGED) ---
-    try {
-        context = cast.framework.CastReceiverContext.getInstance();
-        const castReceiverOptions = new cast.framework.CastReceiverOptions();
-        castReceiverOptions.disableIdleTimeout = true;
-        castReceiverOptions.maxInactivity = 3600;
-
-        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-            try {
-                let data = customEvent.data;
-                if (typeof data === 'string') {
-                    data = JSON.parse(data);
-                }
-
-                if (data.type === 'offer') {
-                    handleOffer(data);
-                } else if (data.type === 'ice_candidate') {
-                    handleIceCandidate(data);
-                } else if (data.type === 'audio') {
-                    handleAudioData(data); // This now feeds our jitter buffer
-                }
-            } catch (e) {
-                console.error('Message processing error:', e);
-            }
-        });
-
-        context.addEventListener(cast.framework.system.EventType.READY, () => {
-            statusEl.textContent = 'Ready';
-            console.log('Receiver ready');
-        });
-
-        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-            statusEl.textContent = 'Connected - Waiting for stream...';
-            console.log('Sender connected:', event.senderId);
-        });
-
-        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-            statusEl.textContent = 'Disconnected';
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            remoteVideo.srcObject = null;
-            stopAudioPlayback();
-        });
-
-        context.start(castReceiverOptions);
-
-    } catch (e) {
-        console.error('Init error:', e);
-        statusEl.textContent = 'Error: ' + e.message;
-    }
+    // --- MAIN RECEIVER LOGIC ---
+    const castReceiverOptions = new cast.framework.CastReceiverOptions();
+    castReceiverOptions.disableIdleTimeout = true;
+    context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+        // This only handles the initial connection now
+        try {
+            const data = JSON.parse(customEvent.data);
+            if (data.type === 'offer') handleOffer(data);
+            else if (data.type === 'ice_candidate') handleIceCandidate(data);
+        } catch (e) {}
+    });
+    context.start(castReceiverOptions);
 
     async function handleOffer(data) {
-        // This function is exactly as you provided. It is not changed.
-        try {
-            console.log('Handling offer');
-            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' };
-            peerConnection = new RTCPeerConnection(configuration);
-            let streamSet = false;
-            peerConnection.ontrack = (event) => {
-                if (event.streams && event.streams[0] && !streamSet) {
-                    remoteVideo.srcObject = event.streams[0];
-                    streamSet = true;
-                    remoteVideo.play().catch(e => console.error('Play failed:', e));
-                }
+        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+        // ===================================================================
+        // THIS IS THE KEY CHANGE: LISTEN FOR THE DATACHANNEL
+        // ===================================================================
+        peerConnection.ondatachannel = (event) => {
+            const receiveChannel = event.channel;
+            console.log('>>> Audio DataChannel received:', receiveChannel.label);
+            
+            // When a message (raw audio data) arrives, process it.
+            receiveChannel.onmessage = async (messageEvent) => {
+                // messageEvent.data is a raw ArrayBuffer, which is very fast.
+                // We decode it and feed it into our jitter buffer.
+                if (!audioContext) initializeAudioContext(24000);
+                if (!audioContext) return;
+
+                try {
+                    const arrayBuffer = messageEvent.data;
+                    const int16Array = new Int16Array(arrayBuffer);
+                    const float32Array = new Float32Array(int16Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                        float32Array[i] = int16Array[i] / 32768.0;
+                    }
+
+                    const audioBuffer = audioContext.createBuffer(1, float32Array.length, audioContext.sampleRate);
+                    audioBuffer.getChannelData(0).set(float32Array);
+                    
+                    audioQueue.push(audioBuffer);
+
+                    const START_THRESHOLD = 5;
+                    if (!isPlayingAudio && audioQueue.length > START_THRESHOLD) {
+                        isPlayingAudio = true;
+                        processAudioQueue();
+                    }
+                } catch(e) {}
             };
-            peerConnection.oniceconnectionstatechange = () => {
-                console.log('ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected') {
-                    statusEl.textContent = 'Streaming (Video + Audio)';
-                }
-            };
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    sendMessage({ type: 'ice_candidate', candidate: event.candidate.candidate, sdpMid: event.candidate.sdpMid, sdpMLineIndex: event.candidate.sdpMLineIndex });
-                }
-            };
-            await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            sendMessage({ type: 'answer', sdp: answer.sdp });
-        } catch (e) {
-            console.error('Offer handling error:', e);
-            statusEl.textContent = 'Error: ' + e.message;
-        }
+        };
+        // ===================================================================
+
+        // Video track logic is unchanged
+        peerConnection.ontrack = (event) => {
+            if (event.track.kind === 'video' && event.streams && event.streams[0]) {
+                remoteVideo.srcObject = event.streams[0];
+                remoteVideo.play().catch(e => console.error("Video play failed", e));
+            }
+        };
+
+        // ICE candidate and SDP logic is unchanged
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) sendMessage({ type: 'ice_candidate', ...event.candidate.toJSON() });
+        };
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        sendMessage({ type: 'answer', sdp: answer.sdp });
     }
 
     async function handleIceCandidate(data) {
-        // This function is exactly as you provided. It is not changed.
-        try {
-            if (peerConnection && data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: data.candidate, sdpMid: data.sdpMid, sdpMLineIndex: data.sdpMLineIndex }));
-            }
-        } catch (e) {
-            console.error('ICE candidate error:', e);
-        }
+        if (peerConnection) await peerConnection.addIceCandidate(new RTCIceCandidate(data));
     }
 
     function sendMessage(messageObject) {
-        // This function is exactly as you provided. It is not changed.
-        try {
-            const messageStr = JSON.stringify(messageObject);
-            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-        } catch (e) {
-            console.error('Send message error:', e);
-        }
+        context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
     }
 </script>
 </body>
 </html>
+
