@@ -4,28 +4,26 @@
     const remoteVideo = document.getElementById('remoteVideo');
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
-    let context = null;
-    let audioContext = null;
+    let context = cast.framework.CastReceiverContext.getInstance();
 
-    // --- INITIALIZATION ---
-    try {
-        context = cast.framework.CastReceiverContext.getInstance();
-        const castReceiverOptions = new cast.framework.CastReceiverOptions();
-        castReceiverOptions.disableIdleTimeout = true;
-        castReceiverOptions.maxInactivity = 3600;
+    // --- Add Event Listeners to the Video Element ---
+    // These will tell us if the video element itself is having problems.
+    remoteVideo.addEventListener('playing', () => { statusEl.textContent = '[Video Event: PLAYING]'; });
+    remoteVideo.addEventListener('waiting', () => { statusEl.textContent = '[Video Event: WAITING FOR DATA...]'; });
+    remoteVideo.addEventListener('error', () => { statusEl.textContent = '[FATAL: VIDEO ELEMENT ERROR!]'; });
+    remoteVideo.addEventListener('stalled', () => { statusEl.textContent = '[Video Event: STALLED]'; });
 
-        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+
+    // --- Main Receiver Logic ---
+    const castReceiverOptions = new cast.framework.CastReceiverOptions();
+    castReceiverOptions.disableIdleTimeout = true;
+    castReceiverOptions.maxInactivity = 3600;
+
+    context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+        try {
             let data = customEvent.data;
             if (typeof data === 'string') {
-                // We'll see this for every message that arrives.
-                statusEl.textContent = 'Message Received (' + data.length + ' chars)';
-                try {
-                    data = JSON.parse(data);
-                } catch (e) {
-                    statusEl.textContent = 'ERROR: JSON.parse failed!';
-                    console.error('JSON parse error:', e);
-                    return;
-                }
+                data = JSON.parse(data);
             }
 
             if (data.type === 'offer') {
@@ -33,140 +31,35 @@
             } else if (data.type === 'ice_candidate') {
                 handleIceCandidate(data);
             } else if (data.type === 'audio') {
-                // If we get here, the message was successfully parsed as audio type.
-                handleAudioData(data);
+                // We'll keep the audio logic simple for now to focus on video
+                // console.log("Audio packet received");
             }
-        });
-
-        context.addEventListener(cast.framework.system.EventType.READY, () => {
-            statusEl.textContent = 'Ready';
-        });
-
-        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-            statusEl.textContent = 'Connected - Waiting for stream...';
-        });
-
-        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-            statusEl.textContent = 'Disconnected';
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            remoteVideo.srcObject = null;
-        });
-
-        context.start(castReceiverOptions);
-    } catch (e) {
-        statusEl.textContent = 'FATAL ERROR: ' + e.message;
-        console.error('Init error:', e);
-    }
-
-    // --- AUDIO HANDLING WITH VISUAL DEBUGGING ---
-    function initializeAudioContext() {
-        if (audioContext && audioContext.state !== 'closed') return;
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 48000,
-                latencyHint: 'interactive'
-            });
-            statusEl.textContent = 'AudioContext Initialized';
         } catch (e) {
-            statusEl.textContent = 'ERROR: AudioContext Failed!';
-            console.error('Failed to initialize AudioContext:', e);
+            statusEl.textContent = '[ERROR: JSON.parse failed]';
         }
-    }
+    });
 
-    function handleAudioData(data) {
-        // This is our main debug function. We will update the status at each step.
-        try {
-            // Step 1: Check if AudioContext exists.
-            initializeAudioContext();
-            if (!audioContext) {
-                statusEl.textContent = 'ERROR: No AudioContext!';
-                return;
-            }
-
-            // Step 2: Decode the Base64 data.
-            statusEl.textContent = 'Decoding Base64...';
-            const binaryString = atob(data.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            // Step 3: Convert raw bytes to a format the Web Audio API can use.
-            statusEl.textContent = 'Converting to Float32...';
-            const int16Array = new Int16Array(bytes.buffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0;
-            }
-
-            // Step 4: Create the final audio buffer.
-            statusEl.textContent = 'Creating AudioBuffer...';
-            const channels = 2;
-            const samplesPerChannel = float32Array.length / channels;
-            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, 48000);
-            
-            const leftChannel = audioBuffer.getChannelData(0);
-            const rightChannel = audioBuffer.getChannelData(1);
-            for (let i = 0; i < samplesPerChannel; i++) {
-                leftChannel[i] = float32Array[i * 2];
-                rightChannel[i] = float32Array[i * 2 + 1];
-            }
-
-            // Step 5: Play the buffer.
-            statusEl.textContent = 'Playing Audio...';
-            const source = audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(audioContext.destination);
-            source.start(0); // Play immediately for simplicity.
-
-        } catch (e) {
-            // If ANY of the steps above fail, this will catch the error and display it.
-            statusEl.textContent = 'AUDIO ERROR: ' + e.message;
-            console.error('Error processing audio data:', e);
+    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+        statusEl.textContent = 'Disconnected';
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
         }
-    }
+        remoteVideo.srcObject = null;
+    });
 
-    // --- WebRTC Video Handling (Unchanged) ---
-    async function handleOffer(data) { /* ... NO CHANGES IN THIS FUNCTION ... */ }
-    async function handleIceCandidate(data) { /* ... NO CHANGES IN THIS FUNCTION ... */ }
-    function sendMessage(messageObject) { /* ... NO CHANGES IN THIS FUNCTION ... */ }
+    context.start(castReceiverOptions);
 
-    // --- PASTE THE ORIGINAL handleOffer, handleIceCandidate, and sendMessage functions here ---
-    // Make sure to copy them from your original file. For brevity, they are omitted here.
-
-    // ... (Your original WebRTC functions go here) ...
     async function handleOffer(data) {
         try {
-            console.log('Handling offer');
-
-            const configuration = {
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                bundlePolicy: 'max-bundle',
-                rtcpMuxPolicy: 'require'
-            };
+            statusEl.textContent = '[Offer Received]';
+            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
             peerConnection = new RTCPeerConnection(configuration);
 
-            let streamSet = false;
-
-            peerConnection.ontrack = (event) => {
-                console.log('Track received:', event.track.kind);
-                if (event.streams && event.streams[0]) {
-                    if (!streamSet) {
-                        remoteVideo.srcObject = event.streams[0];
-                        streamSet = true;
-                        remoteVideo.play().catch(e => console.error('Play failed:', e));
-                    }
-                }
-            };
-
+            // --- DEBUG: Show every ICE connection state change on screen ---
             peerConnection.oniceconnectionstatechange = () => {
+                statusEl.textContent = '[ICE State: ' + peerConnection.iceConnectionState + ']';
                 console.log('ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected') {
-                    statusEl.textContent = 'Streaming';
-                }
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -180,39 +73,52 @@
                 }
             };
 
-            await peerConnection.setRemoteDescription(new RTCSessionDescription({
-                type: 'offer',
-                sdp: data.sdp
-            }));
+            // --- This is the MOST IMPORTANT part for debugging the black screen ---
+            peerConnection.ontrack = (event) => {
+                statusEl.textContent = '[Track Received: ' + event.track.kind + ']';
+                
+                if (event.streams && event.streams[0]) {
+                    statusEl.textContent = '[Binding Stream to Video Element...]';
+                    remoteVideo.srcObject = event.streams[0];
+
+                    // Attempt to play and report success or failure
+                    remoteVideo.play().then(() => {
+                        statusEl.textContent = '[SUCCESS: Video Playback Started!]';
+                    }).catch(e => {
+                        statusEl.textContent = '[PLAY FAILED: ' + e.message + ']';
+                    });
+
+                } else {
+                    statusEl.textContent = '[ERROR: Track event had no stream!]';
+                }
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
+            statusEl.textContent = '[Remote Description Set]';
+            
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
+            statusEl.textContent = '[Answer Created]';
+            
             sendMessage({ type: 'answer', sdp: answer.sdp });
+
         } catch (e) {
-            console.error('Offer handling error:', e);
+            statusEl.textContent = '[FATAL OFFER ERROR: ' + e.message + ']';
         }
     }
 
     async function handleIceCandidate(data) {
         try {
             if (peerConnection && data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate({
-                    candidate: data.candidate,
-                    sdpMid: data.sdpMid,
-                    sdpMLineIndex: data.sdpMLineIndex
-                }));
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data));
             }
-        } catch (e) {
-            console.error('ICE candidate error:', e);
-        }
+        } catch (e) { console.error('ICE candidate error:', e); }
     }
 
     function sendMessage(messageObject) {
         try {
             const messageStr = JSON.stringify(messageObject);
             context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-        } catch (e) {
-            console.error('Send message error:', e);
-        }
+        } catch (e) { console.error('Send message error:', e); }
     }
-
 </script>
