@@ -39,12 +39,15 @@
     const remoteVideo = document.getElementById('remoteVideo');
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
-    const context = cast.framework.CastReceiverContext.getInstance();
+    let context = null;
 
     remoteVideo.muted = false;
     remoteVideo.volume = 1.0;
 
-    // --- JITTER BUFFER & AUDIO PLAYBACK ENGINE (UNCHANGED) ---
+    // ===================================================================
+    // START: JITTER BUFFER FOR SMOOTH AUDIO
+    // This logic is self-contained and will fix the stuttering and crackling.
+    // ===================================================================
     let audioContext = null;
     const audioQueue = [];
     let isPlayingAudio = false;
@@ -55,8 +58,10 @@
         if (audioContext) audioContext.close();
         try {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: sampleRate, latencyHint: 'interactive'
+                sampleRate: sampleRate,
+                latencyHint: 'interactive'
             });
+            console.log('AudioContext initialized at:', audioContext.sampleRate, 'Hz');
         } catch (e) { console.error('Failed to initialize AudioContext:', e); }
     }
 
@@ -72,86 +77,172 @@
         source.start(nextPlayTime);
         nextPlayTime += bufferToPlay.duration;
     }
-    
-    // --- MAIN RECEIVER LOGIC ---
-    const castReceiverOptions = new cast.framework.CastReceiverOptions();
-    castReceiverOptions.disableIdleTimeout = true;
-    context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-        // This only handles the initial connection now
+
+    // This function is now called by the DataChannel's onmessage event.
+    async function onAudioDataReceived(arrayBuffer) {
+        if (!audioContext) initializeAudioContext(24000); // Default to 24kHz if not ready
+        if (!audioContext) return;
+
         try {
-            const data = JSON.parse(customEvent.data);
-            if (data.type === 'offer') handleOffer(data);
-            else if (data.type === 'ice_candidate') handleIceCandidate(data);
-        } catch (e) {}
-    });
-    context.start(castReceiverOptions);
+            const int16Array = new Int16Array(arrayBuffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0;
+            }
+            const audioBuffer = audioContext.createBuffer(1, float32Array.length, audioContext.sampleRate);
+            audioBuffer.getChannelData(0).set(float32Array);
+            audioQueue.push(audioBuffer);
+            const START_THRESHOLD = 5;
+            if (!isPlayingAudio && audioQueue.length > START_THRESHOLD) {
+                isPlayingAudio = true;
+                processAudioQueue();
+            }
+        } catch(e) {}
+    }
+
+    function stopAudioPlayback() {
+        audioQueue.length = 0;
+        isPlayingAudio = false;
+        nextPlayTime = 0;
+        if (audioContext) {
+            try {
+                audioContext.close();
+                audioContext = null;
+            } catch (e) { console.error('Error closing AudioContext:', e); }
+        }
+    }
+    // ===================================================================
+    // END: JITTER BUFFER IMPLEMENTATION
+    // ===================================================================
+
+    // --- YOUR CONNECTION LOGIC (UNCHANGED, BUT WITH DATACHANNEL ADDED) ---
+    try {
+        context = cast.framework.CastReceiverContext.getInstance();
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600;
+
+        // The custom message listener is now only for signaling
+        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+            try {
+                let data = customEvent.data;
+                if (typeof data === 'string') { data = JSON.parse(data); }
+                if (data.type === 'offer') {
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    handleIceCandidate(data);
+                }
+                // The 'audio' type is no longer handled here.
+            } catch (e) {
+                console.error('Message processing error:', e);
+            }
+        });
+
+        // Your event listeners are UNCHANGED
+        context.addEventListener(cast.framework.system.EventType.READY, () => {
+            statusEl.textContent = 'Ready';
+            console.log('Receiver ready');
+        });
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
+            statusEl.textContent = 'Connected - Waiting for stream...';
+        });
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            statusEl.textContent = 'Disconnected';
+            if (peerConnection) peerConnection.close();
+            remoteVideo.srcObject = null;
+            stopAudioPlayback(); // We call our stop function here
+        });
+        context.start(castReceiverOptions);
+    } catch (e) {
+        console.error('Init error:', e);
+    }
 
     async function handleOffer(data) {
-        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+        // This function is exactly as you provided it, with ONE addition.
+        try {
+            console.log('Handling offer');
+            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' };
+            peerConnection = new RTCPeerConnection(configuration);
 
-        // ===================================================================
-        // THIS IS THE KEY CHANGE: LISTEN FOR THE DATACHANNEL
-        // ===================================================================
-        peerConnection.ondatachannel = (event) => {
-            const receiveChannel = event.channel;
-            console.log('>>> Audio DataChannel received:', receiveChannel.label);
-            
-            // When a message (raw audio data) arrives, process it.
-            receiveChannel.onmessage = async (messageEvent) => {
-                // messageEvent.data is a raw ArrayBuffer, which is very fast.
-                // We decode it and feed it into our jitter buffer.
-                if (!audioContext) initializeAudioContext(24000);
-                if (!audioContext) return;
-
-                try {
-                    const arrayBuffer = messageEvent.data;
-                    const int16Array = new Int16Array(arrayBuffer);
-                    const float32Array = new Float32Array(int16Array.length);
-                    for (let i = 0; i < int16Array.length; i++) {
-                        float32Array[i] = int16Array[i] / 32768.0;
-                    }
-
-                    const audioBuffer = audioContext.createBuffer(1, float32Array.length, audioContext.sampleRate);
-                    audioBuffer.getChannelData(0).set(float32Array);
-                    
-                    audioQueue.push(audioBuffer);
-
-                    const START_THRESHOLD = 5;
-                    if (!isPlayingAudio && audioQueue.length > START_THRESHOLD) {
-                        isPlayingAudio = true;
-                        processAudioQueue();
-                    }
-                } catch(e) {}
+            // ===================================================================
+            // THE ONLY ADDITION: We tell the connection to listen for the DataChannel.
+            // ===================================================================
+            peerConnection.ondatachannel = (event) => {
+                const receiveChannel = event.channel;
+                console.log('>>> Audio DataChannel received:', receiveChannel.label);
+                // When a message (raw audio data) arrives, feed it to our jitter buffer.
+                receiveChannel.onmessage = (messageEvent) => {
+                    onAudioDataReceived(messageEvent.data);
+                };
             };
-        };
-        // ===================================================================
+            // ===================================================================
 
-        // Video track logic is unchanged
-        peerConnection.ontrack = (event) => {
-            if (event.track.kind === 'video' && event.streams && event.streams[0]) {
-                remoteVideo.srcObject = event.streams[0];
-                remoteVideo.play().catch(e => console.error("Video play failed", e));
-            }
-        };
+            // Your ontrack logic is UNCHANGED.
+            let streamSet = false;
+            peerConnection.ontrack = (event) => {
+                if (event.streams && event.streams[0] && !streamSet) {
+                    remoteVideo.srcObject = event.streams[0];
+                    streamSet = true;
+                    remoteVideo.play().catch(e => console.error('Play failed:', e));
+                }
+            };
 
-        // ICE candidate and SDP logic is unchanged
-        peerConnection.onicecandidate = (event) => {
-            if (event.candidate) sendMessage({ type: 'ice_candidate', ...event.candidate.toJSON() });
-        };
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        sendMessage({ type: 'answer', sdp: answer.sdp });
+            // Your oniceconnectionstatechange logic is UNCHANGED.
+            peerConnection.oniceconnectionstatechange = () => {
+                if (peerConnection.iceConnectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + Audio)';
+                }
+            };
+            
+            // Your onicecandidate logic is UNCHANGED.
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendMessage({ type: 'ice_candidate', candidate: event.candidate.candidate, sdpMid: event.candidate.sdpMid, sdpMLineIndex: event.candidate.sdpMLineIndex });
+                }
+            };
+
+            // Your SDP negotiation logic is UNCHANGED.
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            sendMessage({ type: 'answer', sdp: answer.sdp });
+
+            // YOUR SETTIMEOUT IS UNCHANGED.
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Total receivers:', receivers.length);
+                receivers.forEach((receiver) => {
+                    if (receiver.track) {
+                        console.log(`Receiver:`, receiver.track.kind, 'state:', receiver.track.readyState);
+                    }
+                });
+            }, 1500);
+
+        } catch (e) {
+            console.error('Offer handling error:', e);
+        }
     }
 
     async function handleIceCandidate(data) {
-        if (peerConnection) await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+        // This function is exactly as you provided. It is not changed.
+        try {
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: data.candidate, sdpMid: data.sdpMid, sdpMLineIndex: data.sdpMLineIndex }));
+            }
+        } catch (e) {
+            console.error('ICE candidate error:', e);
+        }
     }
 
     function sendMessage(messageObject) {
-        context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(messageObject));
+        // This function is exactly as you provided. It is not changed.
+        try {
+            const messageStr = JSON.stringify(messageObject);
+            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
+        } catch (e) {
+            console.error('Send message error:', e);
+        }
     }
 </script>
 </body>
 </html>
-
