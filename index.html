@@ -59,6 +59,7 @@
 
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
+                console.log('<-- Received custom message from sender:', customEvent.data);
                 let data = customEvent.data;
                 if (typeof data === 'string') {
                     data = JSON.parse(data);
@@ -117,6 +118,7 @@
     }
 
     function handleAudioData(data) {
+        console.log('handleAudioData called. Packet size (base64):', data.data ? data.data.length : 'N/A');
         if (!audioContext) {
             console.warn('AudioContext not initialized, initializing now...');
             initializeAudioContext();
