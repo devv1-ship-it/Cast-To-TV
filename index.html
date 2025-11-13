@@ -53,33 +53,15 @@
     let isPlayingAudio = false;
     let nextPlayTime = 0;
 
-    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-<script>
-    const statusEl = document.getElementById('status');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-    let peerConnection = null;
-    const context = cast.framework.CastReceiverContext.getInstance();
-
-    remoteVideo.muted = false;
-    remoteVideo.volume = 1.0;
-
-    // --- JITTER BUFFER & AUDIO PLAYBACK ENGINE ---
-    let audioContext = null;
-    const audioQueue = [];
-    let isPlayingAudio = false;
-    let nextPlayTime = 0;
-
-    // THE FIX: This function now takes the sampleRate from the phone.
     function initializeAudioContext(sampleRate) {
         if (audioContext && audioContext.sampleRate === sampleRate) return;
         if (audioContext) audioContext.close();
         try {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: sampleRate, // Use the rate the sender specified
+                sampleRate: sampleRate,
                 latencyHint: 'interactive'
             });
-            console.log('✓ AudioContext initialized at:', audioContext.sampleRate, 'Hz');
+            console.log('AudioContext initialized at:', audioContext.sampleRate, 'Hz');
         } catch (e) { console.error('Failed to initialize AudioContext:', e); }
     }
 
@@ -94,34 +76,6 @@
         if (nextPlayTime < currentTime) nextPlayTime = currentTime;
         source.start(nextPlayTime);
         nextPlayTime += bufferToPlay.duration;
-    }
-
-    // THE FIX: This function now reads the sample rate from each message.
-    function handleAudioData(data) {
-        const sampleRate = data.sampleRate || 24000; // Get sample rate, default to 24000
-        initializeAudioContext(sampleRate); // Ensure context is correct
-        if (!audioContext) return;
-
-        try {
-            const binaryString = atob(data.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            
-            const int16Array = new Int16Array(bytes.buffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) float32Array[i] = int16Array[i] / 32768.0;
-
-            const audioBuffer = audioContext.createBuffer(1, float32Array.length, sampleRate);
-            audioBuffer.getChannelData(0).set(float32Array);
-            
-            audioQueue.push(audioBuffer);
-
-            const START_THRESHOLD = 5;
-            if (!isPlayingAudio && audioQueue.length > START_THRESHOLD) {
-                isPlayingAudio = true;
-                processAudioQueue();
-            }
-        } catch (e) {}
     }
 
     // This function is now called by the DataChannel's onmessage event.
@@ -292,4 +246,3 @@
 </script>
 </body>
 </html>
-
