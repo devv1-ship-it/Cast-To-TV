@@ -1,7 +1,6 @@
 <!--THIS FILE IS UPLOADED TO SERVER AND PUBLISHED-->
 <!DOCTYPE html>
 <html>
-
 <head>
     <meta charset="UTF-8">
     <title>WebRTC Screen Mirroring</title>
@@ -13,12 +12,18 @@
             font-family: Arial, sans-serif;
         }
 
-        #remoteVideo {
+        #remoteVideo,
+        #youtubePlayer {
             width: 100vw;
             height: 100vh;
             object-fit: contain;
             background: #000;
+            position: absolute;
+            top: 0;
+            left: 0;
         }
+
+        #youtubePlayer { display: none; }
 
         #status {
             position: absolute;
@@ -30,49 +35,94 @@
             border-radius: 5px;
             z-index: 100;
         }
+        
+        /* CSS FOR THE ON-SCREEN LOGGER */
+        #debug-log-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 80%;
+            height: 50%;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-family: monospace;
+            font-size: 14px;
+            padding: 10px;
+            z-index: 9999;
+            overflow-y: scroll;
+            border: 1px solid #555;
+            display: block;
+        }
+        .log-msg { margin: 0; padding: 2px 0; border-bottom: 1px solid #333; }
+        .log-error { color: #ff6b6b; }
+        .log-warn { color: #ffd966; }
     </style>
 </head>
-
 <body>
+    <!-- HTML ELEMENT FOR THE LOGGER -->
+    <div id="debug-log-overlay"></div>
+
     <div id="status">Connecting...</div>
     <video id="remoteVideo" autoplay playsinline muted="false"></video>
-
-    <!-- ⬇️⬇️⬇️ FIX 1: ADD THIS DIV FOR THE YOUTUBE PLAYER ⬇️⬇️⬇️ -->
     <div id="youtubePlayer"></div>
+
+    <!-- This must be the first script to run -->
+    <script>
+        // JAVASCRIPT FOR THE ON-SCREEN LOGGER
+        (function () {
+            const logContainer = document.getElementById('debug-log-overlay');
+            if (!logContainer) return;
+
+            function addLogMessage(message, className) {
+                const p = document.createElement('p');
+                p.textContent = message;
+                p.className = 'log-msg ' + className;
+                logContainer.appendChild(p);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+
+            const originalConsole = {
+                log: console.log.bind(console),
+                error: console.error.bind(console),
+                warn: console.warn.bind(console),
+            };
+
+            console.log = function(...args) {
+                originalConsole.log(...args);
+                const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+                addLogMessage('LOG: ' + message, 'log-info');
+            };
+            console.error = function(...args) {
+                originalConsole.error(...args);
+                const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+                addLogMessage('ERROR: ' + message, 'log-error');
+            };
+            console.warn = function(...args) {
+                originalConsole.warn(...args);
+                const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+                addLogMessage('WARN: ' + message, 'log-warn');
+            };
+
+            window.onerror = function(message, source, lineno, colno, error) {
+                const fullMessage = `Uncaught Exception: ${message} at ${source}:${lineno}:${colno}`;
+                console.error(fullMessage, error);
+                return true;
+            };
+        })();
+    </script>
 
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script>
+        // --- YOUR APPLICATION CODE ---
         const statusEl = document.getElementById('status');
         const remoteVideo = document.getElementById('remoteVideo');
-        // --- Get a reference to the new div ---
         const youtubePlayerEl = document.getElementById('youtubePlayer');
         const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
         let peerConnection = null;
         let context = null;
-        let youtubePlayer = null; // Declare youtubePlayer globally
-        
-    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <script>
-        const statusEl = document.getElementById('status');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        let peerConnection = null;
-        let context = null;
 
-        // Ensure video is not muted
-        remoteVideo.muted = false;
-        remoteVideo.volume = 1.0;
-
-        // Audio playback components
-        let audioContext = null;
-        let audioQueue = [];
-        let isPlayingAudio = false;
-        let nextPlayTime = 0;
-        let youtubePlayer = null; // The YT.Player object
-        let isYouTubeApiReady = false; // Flag to track if the API script has loaded and run onYouTubeIframeAPIReady
-        let isYouTubeApiLoading = false; // Flag to prevent injecting the script multiple times
-        let pendingVideoId = null; // Stores the last requested videoId if the player isn't ready
         try {
+            console.log("Receiver script starting.");
             context = cast.framework.CastReceiverContext.getInstance();
             const castReceiverOptions = new cast.framework.CastReceiverOptions();
             castReceiverOptions.disableIdleTimeout = true;
@@ -81,19 +131,19 @@
             context.addCustomMessageListener(NAMESPACE, function(customEvent) {
                 try {
                     let data = customEvent.data;
+                    console.log("Received custom message:", data);
                     if (typeof data === 'string') {
                         data = JSON.parse(data);
                     }
 
                     if (data.type === 'offer') {
+                        // You need to define cleanupYouTube() and handleOffer()
                         handleOffer(data);
                     } else if (data.type === 'ice_candidate') {
+                        // You need to define handleIceCandidate()
                         handleIceCandidate(data);
-                    } else if (data.type === 'audio') {
-                        handleAudioData(data);
-                    } 
-                    else if (data.type === 'YOUTUBE') {
-                        cleanupWebRTC();
+                    } else if (data.type === 'YOUTUBE') {
+                        console.log('Received YOUTUBE message with videoId:', data.videoId);
                         loadYouTubeVideo(data.videoId);
                     }
                 } catch (e) {
@@ -104,7 +154,6 @@
             context.addEventListener(cast.framework.system.EventType.READY, () => {
                 statusEl.textContent = 'Ready';
                 console.log('Receiver ready');
-                initializeAudioContext();
             });
 
             context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
@@ -119,194 +168,84 @@
                     peerConnection = null;
                 }
                 remoteVideo.srcObject = null;
-                stopAudioPlayback();
             });
 
             context.start(castReceiverOptions);
+            console.log("CastReceiverContext started.");
 
         } catch (e) {
-            console.error('Init error:', e);
-            statusEl.textContent = 'Error: ' + e.message;
+            console.error('Fatal initialization error:', e);
         }
-
-        function initializeAudioContext() {
-            try {
-                audioContext = new(window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 48000,
-                    latencyHint: 'interactive'
-                });
-                console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
-            } catch (e) {
-                console.error('Failed to initialize AudioContext:', e);
-            }
-        }
-
-        function handleAudioData(data) {
-            if (!audioContext) {
-                console.warn('AudioContext not initialized, initializing now...');
-                initializeAudioContext();
-                if (!audioContext) {
-                    console.error('Failed to initialize AudioContext');
-                    return;
-                }
-            }
-
-            try {
-                // Decode base64 audio data
-                const binaryString = atob(data.data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-
-                // Convert PCM bytes to Float32Array
-                const int16Array = new Int16Array(bytes.buffer);
-                const float32Array = new Float32Array(int16Array.length);
-                for (let i = 0; i < int16Array.length; i++) {
-                    float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
-                }
-
-                // Split stereo data into left and right channels
-                const channels = data.channels || 2;
-                const samplesPerChannel = float32Array.length / channels;
-
-                // Create AudioBuffer
-                const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
-
-                if (channels === 2) {
-                    const leftChannel = audioBuffer.getChannelData(0);
-                    const rightChannel = audioBuffer.getChannelData(1);
-                    for (let i = 0; i < samplesPerChannel; i++) {
-                        leftChannel[i] = float32Array[i * 2];
-                        rightChannel[i] = float32Array[i * 2 + 1];
-                    }
-                } else {
-                    const channelData = audioBuffer.getChannelData(0);
-                    for (let i = 0; i < samplesPerChannel; i++) {
-                        channelData[i] = float32Array[i];
-                    }
-                }
-
-                playAudioBuffer(audioBuffer);
-
-                // Log occasionally to confirm audio is being received
-                if (!window.audioPacketCount) window.audioPacketCount = 0;
-                window.audioPacketCount++;
-                if (window.audioPacketCount % 100 === 0) {
-                    console.log('✓ System audio packets received:', window.audioPacketCount);
-                }
-            } catch (e) {
-                console.error('Error processing audio data:', e);
-            }
-        }
-
-        function playAudioBuffer(audioBuffer) {
-            const source = audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(audioContext.destination);
-
-            // Schedule playback
-            const currentTime = audioContext.currentTime;
-            if (nextPlayTime < currentTime) {
-                nextPlayTime = currentTime;
-            }
-
-            source.start(nextPlayTime);
-            nextPlayTime += audioBuffer.duration;
-        }
-
-        function stopAudioPlayback() {
-            audioQueue = [];
-            isPlayingAudio = false;
-            nextPlayTime = 0;
-            if (audioContext) {
-                try {
-                    audioContext.close();
-                    audioContext = null;
-                } catch (e) {
-                    console.error('Error closing AudioContext:', e);
-                }
-            }
-        }
+        
+        // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
+        let youtubePlayer = null;
+        let isYouTubeApiReady = false;
+        let isYouTubeApiLoading = false;
+        let pendingVideoId = null;
 
         function loadYouTubeVideo(videoId) {
-            // 1. Always store the latest requested video ID.
+            console.log(`[DEBUG] 1. loadYouTubeVideo called with ID: ${videoId}`);
             pendingVideoId = videoId;
-            console.log(`Video ID '${pendingVideoId}' is pending.`);
-
-            // Show the YouTube player container and hide others
             statusEl.style.display = 'none';
             remoteVideo.style.display = 'none';
             youtubePlayerEl.style.display = 'block';
-
-            // 2. If the API is fully ready and the player exists, play immediately.
+            console.log('[DEBUG] 2. Player container is now visible (black screen is expected here).');
             if (isYouTubeApiReady && youtubePlayer) {
-                console.log('API is ready. Playing pending video now.');
+                console.log('[DEBUG] 3a. API is ready. Playing pending video now.');
                 playPendingVideo();
-            }
-            // 3. If the API script is NOT already being loaded, start loading it.
-            else if (!isYouTubeApiLoading) {
-                console.log('API not ready and not loading. Injecting API script now.');
+            } else if (!isYouTubeApiLoading) {
+                console.log('[DEBUG] 3b. API not ready. Injecting API script from youtube.com.');
                 isYouTubeApiLoading = true;
                 const tag = document.createElement('script');
                 tag.src = "https://www.youtube.com/iframe_api";
+                tag.onerror = function() {
+                    console.error('[FATAL] FAILED TO LOAD THE YOUTUBE IFRAME API SCRIPT. Check network or server security policies.');
+                };
                 const firstScriptTag = document.getElementsByTagName('script')[0];
                 firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-                // The API will automatically call `onYouTubeIframeAPIReady` when it's done.
-            }
-            // 4. If the API is already in the process of loading, do nothing.
-            //    The `onYouTubeIframeAPIReady` function will handle playing the video.
-            else {
-                console.log('API is already loading. Waiting for it to finish.');
+            } else {
+                console.log('[DEBUG] 3c. API is currently loading. Waiting for it to complete.');
             }
         }
 
-        /**
-         * This global function is required by the YouTube IFrame API.
-         * It will be called automatically when the script from tag.src has loaded.
-         */
         window.onYouTubeIframeAPIReady = function() {
-            console.log('✅ YouTube IFrame API is now ready.');
+            console.log('[DEBUG] 4. onYouTubeIframeAPIReady has been called by the YouTube script.');
             isYouTubeApiReady = true;
             isYouTubeApiLoading = false;
-
-            // If a player object doesn't exist yet, create it.
             if (!youtubePlayer) {
-                youtubePlayer = new YT.Player('youtubePlayer', {
-                    height: '100%',
-                    width: '100%',
-                    // We use the pendingVideoId to initialize the player
-                    videoId: pendingVideoId,
-                    playerVars: { 'autoplay': 1, 'controls': 1 },
-                    events: {
-                        'onReady': onPlayerReady
-                    }
-                });
+                console.log('[DEBUG] 5. Creating new YT.Player object.');
+                try {
+                    youtubePlayer = new YT.Player('youtubePlayer', {
+                        height: '100%',
+                        width: '100%',
+                        videoId: pendingVideoId,
+                        playerVars: { 'autoplay': 1, 'controls': 1 },
+                        events: { 'onReady': onPlayerReady, 'onError': onPlayerError }
+                    });
+                } catch (e) {
+                     console.error('[FATAL] Error creating YT.Player. Is YT defined?', e);
+                }
             }
         }
 
-        /**
-         * The YouTube player will call this function once it is fully initialized and ready.
-         */
         function onPlayerReady(event) {
-            console.log('✅ YouTube Player is ready.');
-            // The player might already be playing due to autoplay, but we
-            // can ensure it plays the most recent pending video.
+            console.log('[DEBUG] 6. YouTube Player is ready and firing onReady event.');
             playPendingVideo();
         }
 
-        /**
-         * A helper function to play whatever video ID is currently pending.
-         */
-        function playPendingVideo() {
-            if (youtubePlayer && pendingVideoId) {
-                console.log(`Executing loadVideoById with '${pendingVideoId}'.`);
-                youtubePlayer.loadVideoById(pendingVideoId);
-                // Clear the pending ID once we've used it.
-                pendingVideoId = null;
-            }
+        function onPlayerError(event) {
+            console.error('[FATAL] YouTube Player Error:', event.data);
         }
 
+        function playPendingVideo() {
+            if (youtubePlayer && pendingVideoId) {
+                console.log(`[DEBUG] 7. Calling loadVideoById with '${pendingVideoId}'.`);
+                youtubePlayer.loadVideoById(pendingVideoId);
+                pendingVideoId = null;
+            } else {
+                 console.warn('[DEBUG] playPendingVideo called, but player or pendingVideoId is missing.');
+            }
+        }
         /**
          * A helper function to clean up the YouTube player state.
          */
@@ -463,6 +402,7 @@
 </body>
 
 </html>
+
 
 
 
