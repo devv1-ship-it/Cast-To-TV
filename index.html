@@ -461,7 +461,6 @@
             peerConnection.oniceconnectionstatechange = () => {
                 // Safety Check: If peerConnection has already been cleaned up, do nothing.
                 if (!peerConnection) {
-                    console.log('ICE state change event fired after peerConnection was cleared. Ignoring.');
                     return;
                 }
 
@@ -477,16 +476,22 @@
                     case 'failed':
                     case 'closed':
                         // This handles the abrupt disconnection (like Wi-Fi off).
-                        console.warn('WebRTC connection lost or closed. State: ' + currentState + '. Cleaning up session.');
-                        statusEl.textContent = 'Connection Lost';
+                        console.warn('WebRTC connection lost. State: ' + currentState + '. Terminating Cast session.');
+                        statusEl.textContent = 'Connection Lost. Exiting...';
 
-                        // Clean up all resources.
+                        // 1. Clean up WebRTC and audio resources to be tidy.
                         if (peerConnection) {
                             peerConnection.close();
                             peerConnection = null;
                         }
-                        remoteVideo.srcObject = null; // This removes the frozen frame.
+                        remoteVideo.srcObject = null;
                         stopAudioPlayback();
+
+                        // 2. Stop the entire Cast receiver application.
+                        const context = cast.framework.CastReceiverContext.getInstance();
+                        if (context) {
+                            context.stop();
+                        }
                         break;
                 }
             };
@@ -558,6 +563,7 @@
 </script>
 </body>
 </html>
+
 
 
 
