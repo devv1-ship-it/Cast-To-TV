@@ -70,7 +70,10 @@
                     handleIceCandidate(data);
                 } else if (data.type === 'audio') {
                     handleAudioData(data);
-                } 
+                } else if (data.type === 'YOUTUBE') {
+                        cleanupWebRTC();
+                        loadYouTubeVideo(data.videoId);
+                    }
             } catch (e) {
                 console.error('Message processing error:', e);
             }
@@ -365,4 +368,5 @@
 </script>
 </body>
 </html>
+
 
