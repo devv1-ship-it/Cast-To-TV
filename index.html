@@ -142,6 +142,23 @@
             try {
                 let data = customEvent.data;
                 console.log("Received custom message:", data);
+                // Handle STOP_MIRROR message (string or object)
+                if (data === "STOP_MIRROR" || (typeof data === 'object' && data.type === "STOP_MIRROR")) {
+                    console.log("Received STOP_MIRROR command. Cleaning up and resetting UI.");
+                    cleanupWebRTC();
+                    cleanupYouTube();
+                    statusEl.textContent = "Mirroring stopped";
+                    statusEl.style.display = 'block';
+                    remoteVideo.style.display = 'none';
+                    youtubePlayerEl.style.display = 'none';
+                    stopAudioPlayback();
+                    // Optionally close the receiver app
+                    if (typeof window.close === 'function') {
+                        window.close();
+                    }
+                    return;
+                }
+                
                 if (typeof data === 'string') {
                     data = JSON.parse(data);
                 }
@@ -516,3 +533,4 @@
 </script>
 </body>
 </html>
+
