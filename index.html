@@ -461,7 +461,9 @@
 
             peerConnection.oniceconnectionstatechange = () => {
                 console.log('ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected') {
+                const state = peerConnection.iceConnectionState;
+
+                if (state === 'connected') {
                     statusEl.textContent = 'Streaming (Video + Audio)';
                 } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
                     // This is the new logic to handle abrupt disconnection.
@@ -545,5 +547,6 @@
 </script>
 </body>
 </html>
+
 
 
