@@ -68,7 +68,10 @@
         let audioQueue = [];
         let isPlayingAudio = false;
         let nextPlayTime = 0;
-
+        let youtubePlayer = null; // The YT.Player object
+        let isYouTubeApiReady = false; // Flag to track if the API script has loaded and run onYouTubeIframeAPIReady
+        let isYouTubeApiLoading = false; // Flag to prevent injecting the script multiple times
+        let pendingVideoId = null; // Stores the last requested videoId if the player isn't ready
         try {
             context = cast.framework.CastReceiverContext.getInstance();
             const castReceiverOptions = new cast.framework.CastReceiverOptions();
@@ -227,43 +230,105 @@
         }
 
         function loadYouTubeVideo(videoId) {
+            // 1. Always store the latest requested video ID.
+            pendingVideoId = videoId;
+            console.log(`Video ID '${pendingVideoId}' is pending.`);
+
+            // Show the YouTube player container and hide others
             statusEl.style.display = 'none';
             remoteVideo.style.display = 'none';
-            youtubePlayerDiv.style.display = 'block';
+            youtubePlayerEl.style.display = 'block';
 
-            if (youtubePlayer) {
-                youtubePlayer.loadVideoById(videoId);
-            } else {
-                // Load the IFrame Player API script
+            // 2. If the API is fully ready and the player exists, play immediately.
+            if (isYouTubeApiReady && youtubePlayer) {
+                console.log('API is ready. Playing pending video now.');
+                playPendingVideo();
+            }
+            // 3. If the API script is NOT already being loaded, start loading it.
+            else if (!isYouTubeApiLoading) {
+                console.log('API not ready and not loading. Injecting API script now.');
+                isYouTubeApiLoading = true;
                 const tag = document.createElement('script');
                 tag.src = "https://www.youtube.com/iframe_api";
                 const firstScriptTag = document.getElementsByTagName('script')[0];
                 firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-                // The API will call this function when it's ready
-                window.onYouTubeIframeAPIReady = function() {
-                    youtubePlayer = new YT.Player('youtubePlayer', {
-                        height: '100%',
-                        width: '100%',
-                        videoId: videoId,
-                        playerVars: {
-                            'autoplay': 1,
-                            'controls': 1
-                        },
-                        events: {
-                            'onReady': (event) => event.target.playVideo()
-                        }
-                    });
-                }
+                // The API will automatically call `onYouTubeIframeAPIReady` when it's done.
+            }
+            // 4. If the API is already in the process of loading, do nothing.
+            //    The `onYouTubeIframeAPIReady` function will handle playing the video.
+            else {
+                console.log('API is already loading. Waiting for it to finish.');
             }
         }
 
+        /**
+         * This global function is required by the YouTube IFrame API.
+         * It will be called automatically when the script from tag.src has loaded.
+         */
+        window.onYouTubeIframeAPIReady = function() {
+            console.log('✅ YouTube IFrame API is now ready.');
+            isYouTubeApiReady = true;
+            isYouTubeApiLoading = false;
+
+            // If a player object doesn't exist yet, create it.
+            if (!youtubePlayer) {
+                youtubePlayer = new YT.Player('youtubePlayer', {
+                    height: '100%',
+                    width: '100%',
+                    // We use the pendingVideoId to initialize the player
+                    videoId: pendingVideoId,
+                    playerVars: { 'autoplay': 1, 'controls': 1 },
+                    events: {
+                        'onReady': onPlayerReady
+                    }
+                });
+            }
+        }
+
+        /**
+         * The YouTube player will call this function once it is fully initialized and ready.
+         */
+        function onPlayerReady(event) {
+            console.log('✅ YouTube Player is ready.');
+            // The player might already be playing due to autoplay, but we
+            // can ensure it plays the most recent pending video.
+            playPendingVideo();
+        }
+
+        /**
+         * A helper function to play whatever video ID is currently pending.
+         */
+        function playPendingVideo() {
+            if (youtubePlayer && pendingVideoId) {
+                console.log(`Executing loadVideoById with '${pendingVideoId}'.`);
+                youtubePlayer.loadVideoById(pendingVideoId);
+                // Clear the pending ID once we've used it.
+                pendingVideoId = null;
+            }
+        }
+
+        /**
+         * A helper function to clean up the YouTube player state.
+         */
         function cleanupYouTube() {
             if (youtubePlayer) {
                 youtubePlayer.stopVideo();
-                youtubePlayerDiv.style.display = 'none';
             }
+            youtubePlayerEl.style.display = 'none';
+            // Show other elements if needed
+            statusEl.style.display = 'block';
             remoteVideo.style.display = 'block';
+        }
+
+        /**
+         * A helper function to clean up the WebRTC state.
+         */
+        function cleanupWebRTC() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
         }
 
         async function handleOffer(data) {
@@ -398,6 +463,7 @@
 </body>
 
 </html>
+
 
 
 
