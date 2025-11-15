@@ -157,7 +157,12 @@
                 } else if (data.type === 'YOUTUBE') {
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
-                }
+                } else if (data.type === 'stop') {
+                    console.log('Received stop message. Cleaning up receiver UI.');
+                    cleanupWebRTC();
+                    cleanupYouTube();
+                    statusEl.textContent = 'Stopped';
+                }               
             } catch (e) {
                 console.error('Message processing error:', e);
             }
