@@ -463,6 +463,18 @@
                 console.log('ICE state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'connected') {
                     statusEl.textContent = 'Streaming (Video + Audio)';
+                } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                    // This is the new logic to handle abrupt disconnection.
+                    console.warn('WebRTC connection lost. State: ' + state + '. Cleaning up.');
+                    statusEl.textContent = 'Connection Lost';
+
+                    // Close the connection and clear the video.
+                    if (peerConnection) {
+                        peerConnection.close();
+                        peerConnection = null;
+                    }
+                    remoteVideo.srcObject = null; // This removes the last frame.
+                    stopAudioPlayback(); // Clean up audio resources.
                 }
             };
 
@@ -533,4 +545,5 @@
 </script>
 </body>
 </html>
+
 
