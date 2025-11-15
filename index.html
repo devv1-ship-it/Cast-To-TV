@@ -158,11 +158,16 @@
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
                 } else if (data.type === 'stop') {
-                    console.log('Received stop message. Cleaning up receiver UI.');
-                    cleanupWebRTC();
-                    cleanupYouTube();
-                    statusEl.textContent = 'Stopped';
-                }               
+    console.log('Received stop message. Cleaning up receiver UI.');
+    cleanupWebRTC(); // This should detach video, close streams, and clear canvas
+    cleanupYouTube(); // If you use YouTube, stop playback
+    statusEl.textContent = 'Stopped'; // Update status
+    // Optionally, hide or reset any video elements:
+    const videoEl = document.getElementById('video');
+    if (videoEl) {
+        videoEl.srcObject = null;
+        videoEl.style.display = 'none';
+    }
             } catch (e) {
                 console.error('Message processing error:', e);
             }
@@ -521,3 +526,4 @@
 </script>
 </body>
 </html>
+
