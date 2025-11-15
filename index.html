@@ -70,7 +70,7 @@
                     handleIceCandidate(data);
                 } else if (data.type === 'audio') {
                     handleAudioData(data);
-                }
+                } 
             } catch (e) {
                 console.error('Message processing error:', e);
             }
@@ -204,6 +204,41 @@
         }
     }
 
+    function loadYouTubeVideo(videoId) {
+                statusEl.style.display = 'none';
+                remoteVideo.style.display = 'none';
+                youtubePlayerDiv.style.display = 'block';
+
+                if (youtubePlayer) {
+                    youtubePlayer.loadVideoById(videoId);
+                } else {
+                    // Load the IFrame Player API script
+                    const tag = document.createElement('script');
+                    tag.src = "https://www.youtube.com/iframe_api";
+                    const firstScriptTag = document.getElementsByTagName('script')[0];
+                    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+                    // The API will call this function when it's ready
+                    window.onYouTubeIframeAPIReady = function() {
+                        youtubePlayer = new YT.Player('youtubePlayer', {
+                            height: '100%',
+                            width: '100%',
+                            videoId: videoId,
+                            playerVars: { 'autoplay': 1, 'controls': 1 },
+                            events: { 'onReady': (event) => event.target.playVideo() }
+                        });
+                    }
+                }
+            }
+
+            function cleanupYouTube() {
+                if (youtubePlayer) {
+                    youtubePlayer.stopVideo();
+                    youtubePlayerDiv.style.display = 'none';
+                }
+                remoteVideo.style.display = 'block';
+            }
+    
     async function handleOffer(data) {
         try {
             console.log('Handling offer');
@@ -330,3 +365,4 @@
 </script>
 </body>
 </html>
+
