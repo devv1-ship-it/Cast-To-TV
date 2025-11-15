@@ -199,30 +199,25 @@
     }
 
 function fullCleanupAndStop() {
-        console.warn('PERFORMING FULL CLEANUP AND STOPPING RECEIVER.');
+        console.warn('Cleaning up all resources and stopping the receiver.');
         statusEl.textContent = 'Disconnected. Exiting...';
 
-        // 1. Clean up WebRTC resources.
         if (peerConnection) {
-            // Remove the event listener to prevent it from firing again during cleanup.
             peerConnection.oniceconnectionstatechange = null;
             peerConnection.close();
             peerConnection = null;
         }
-        remoteVideo.srcObject = null; // Clear the last frame
+        remoteVideo.srcObject = null;
+        if (audioContext) {
+            audioContext.close().then(() => audioContext = null);
+        }
 
-        // 2. Clean up Audio resources.
-        stopAudioPlayback();
-
-        // 3. Clean up YouTube player if it's active.
-        cleanupYouTube();
-
-        // 4. THIS IS THE KEY: Stop the entire Cast receiver application.
+        // This is the most important part: it closes the application on the TV.
         if (context) {
             context.stop();
         }
     }
-    
+
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
     let youtubePlayer = null;
     let isYouTubeApiReady = false;
@@ -474,9 +469,14 @@ function fullCleanupAndStop() {
             };
 
             peerConnection.oniceconnectionstatechange = () => {
-                console.log('ICE state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'connected') {
-                    statusEl.textContent = 'Streaming (Video + Audio)';
+                if (!peerConnection) return; // Safety check
+
+                const state = peerConnection.iceConnectionState;
+                console.log('ICE state:', state);
+
+                if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                    console.log('WebRTC connection lost unexpectedly. Stopping receiver.');
+                    fullCleanupAndStop();
                 }
             };
 
