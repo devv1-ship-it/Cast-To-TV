@@ -113,7 +113,6 @@
 
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script>
-    // --- YOUR APPLICATION CODE ---
     const statusEl = document.getElementById('status');
     const remoteVideo = document.getElementById('remoteVideo');
     const youtubePlayerEl = document.getElementById('youtubePlayer');
@@ -460,23 +459,35 @@
             };
 
             peerConnection.oniceconnectionstatechange = () => {
-                console.log('ICE state:', peerConnection.iceConnectionState);
-                const state = peerConnection.iceConnectionState;
+                // Safety Check: If peerConnection has already been cleaned up, do nothing.
+                if (!peerConnection) {
+                    console.log('ICE state change event fired after peerConnection was cleared. Ignoring.');
+                    return;
+                }
 
-                if (state === 'connected') {
-                    statusEl.textContent = 'Streaming (Video + Audio)';
-                } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                    // This is the new logic to handle abrupt disconnection.
-                    console.warn('WebRTC connection lost. State: ' + state + '. Cleaning up.');
-                    statusEl.textContent = 'Connection Lost';
+                const currentState = peerConnection.iceConnectionState;
+                console.log('ICE state changed to:', currentState);
 
-                    // Close the connection and clear the video.
-                    if (peerConnection) {
-                        peerConnection.close();
-                        peerConnection = null;
-                    }
-                    remoteVideo.srcObject = null; // This removes the last frame.
-                    stopAudioPlayback(); // Clean up audio resources.
+                switch (currentState) {
+                    case 'connected':
+                        statusEl.textContent = 'Streaming';
+                        break;
+                    
+                    case 'disconnected':
+                    case 'failed':
+                    case 'closed':
+                        // This handles the abrupt disconnection (like Wi-Fi off).
+                        console.warn('WebRTC connection lost or closed. State: ' + currentState + '. Cleaning up session.');
+                        statusEl.textContent = 'Connection Lost';
+
+                        // Clean up all resources.
+                        if (peerConnection) {
+                            peerConnection.close();
+                            peerConnection = null;
+                        }
+                        remoteVideo.srcObject = null; // This removes the frozen frame.
+                        stopAudioPlayback();
+                        break;
                 }
             };
 
@@ -547,6 +558,7 @@
 </script>
 </body>
 </html>
+
 
 
 
