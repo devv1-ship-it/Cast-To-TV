@@ -177,6 +177,7 @@
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
             statusEl.textContent = 'Connected - Waiting for stream...';
             console.log('Sender connected:', event.senderId);
+                        resetWatchdog();
         });
 
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
@@ -199,23 +200,44 @@
     }
 
 function fullCleanupAndStop() {
-        console.warn('Cleaning up all resources and stopping the receiver.');
+        console.warn('WATCHDOG or EVENT triggered: Cleaning up all resources and stopping receiver.');
         statusEl.textContent = 'Disconnected. Exiting...';
+
+        // NEW: Clear the watchdog timer to prevent it from firing again during cleanup.
+        if (watchdogTimer) {
+            clearTimeout(watchdogTimer);
+            watchdogTimer = null;
+        }
 
         if (peerConnection) {
             peerConnection.oniceconnectionstatechange = null;
             peerConnection.close();
             peerConnection = null;
         }
-        remoteVideo.srcObject = null;
+        remoteVideo.srcObject = null; // IMPORTANT: This clears the frozen frame.
+        remoteVideo.load(); // Some TVs need this to fully clear the buffer.
+
         if (audioContext) {
-            audioContext.close().then(() => audioContext = null);
+            audioContext.close().catch(e => console.error("Error closing AudioContext", e));
+            audioContext = null;
         }
 
-        // This is the most important part: it closes the application on the TV.
+        // Final step: stop the application.
         if (context) {
             context.stop();
         }
+    }
+
+    /**
+     * NEW: Resets the watchdog timer. This should be called whenever we get
+     * a sign of life from the sender (like an audio packet).
+     */
+    function resetWatchdog() {
+        if (watchdogTimer) {
+            clearTimeout(watchdogTimer);
+        }
+        // If we don't hear anything for 5 seconds, assume connection is dead.
+        watchdogTimer = setTimeout(fullCleanupAndStop, 5000);
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
@@ -324,6 +346,8 @@ function fullCleanupAndStop() {
     }
 
     function handleAudioData(data) {
+            resetWatchdog();
+
         if (!audioContext) {
             console.warn('AudioContext not initialized, initializing now...');
             initializeAudioContext();
@@ -413,6 +437,8 @@ function fullCleanupAndStop() {
 
     async function handleOffer(data) {
         try {
+                resetWatchdog();
+
             console.log('Handling offer');
 
             const configuration = {
