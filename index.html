@@ -158,16 +158,10 @@
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
                 } else if (data.type === 'stop') {
-    console.log('Received stop message. Cleaning up receiver UI.');
-    cleanupWebRTC(); // This should detach video, close streams, and clear canvas
-    cleanupYouTube(); // If you use YouTube, stop playback
-    statusEl.textContent = 'Stopped'; // Update status
-    // Optionally, hide or reset any video elements:
-    const videoEl = document.getElementById('video');
-    if (videoEl) {
-        videoEl.srcObject = null;
-        videoEl.style.display = 'none';
-    }
+                    console.log('Received stop message. Cleaning up receiver UI.');
+                    cleanupWebRTC();
+                    cleanupYouTube();
+                    statusEl.textContent = 'Stopped';
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
@@ -193,6 +187,7 @@
             }
             remoteVideo.srcObject = null;
             stopAudioPlayback();
+            fullCleanupAndStop();
         });
 
         context.start(castReceiverOptions);
@@ -203,6 +198,31 @@
         statusEl.textContent = 'Error: ' + e.message;
     }
 
+function fullCleanupAndStop() {
+        console.warn('PERFORMING FULL CLEANUP AND STOPPING RECEIVER.');
+        statusEl.textContent = 'Disconnected. Exiting...';
+
+        // 1. Clean up WebRTC resources.
+        if (peerConnection) {
+            // Remove the event listener to prevent it from firing again during cleanup.
+            peerConnection.oniceconnectionstatechange = null;
+            peerConnection.close();
+            peerConnection = null;
+        }
+        remoteVideo.srcObject = null; // Clear the last frame
+
+        // 2. Clean up Audio resources.
+        stopAudioPlayback();
+
+        // 3. Clean up YouTube player if it's active.
+        cleanupYouTube();
+
+        // 4. THIS IS THE KEY: Stop the entire Cast receiver application.
+        if (context) {
+            context.stop();
+        }
+    }
+    
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
     let youtubePlayer = null;
     let isYouTubeApiReady = false;
@@ -527,5 +547,3 @@
 </script>
 </body>
 </html>
-
-
