@@ -35,7 +35,7 @@
             border-radius: 5px;
             z-index: 100;
         }
-        
+
         /* CSS FOR THE ON-SCREEN LOGGER */
         #debug-log-overlay {
             position: fixed;
@@ -113,6 +113,7 @@
 
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script>
+    // --- YOUR APPLICATION CODE ---
     const statusEl = document.getElementById('status');
     const remoteVideo = document.getElementById('remoteVideo');
     const youtubePlayerEl = document.getElementById('youtubePlayer');
@@ -141,23 +142,6 @@
             try {
                 let data = customEvent.data;
                 console.log("Received custom message:", data);
-                // Handle STOP_MIRROR message (string or object)
-                if (data === "STOP_MIRROR" || (typeof data === 'object' && data.type === "STOP_MIRROR")) {
-                    console.log("Received STOP_MIRROR command. Cleaning up and resetting UI.");
-                    cleanupWebRTC();
-                    cleanupYouTube();
-                    statusEl.textContent = "Mirroring stopped";
-                    statusEl.style.display = 'block';
-                    remoteVideo.style.display = 'none';
-                    youtubePlayerEl.style.display = 'none';
-                    stopAudioPlayback();
-                    // Optionally close the receiver app
-                    if (typeof window.close === 'function') {
-                        window.close();
-                    }
-                    return;
-                }
-                
                 if (typeof data === 'string') {
                     data = JSON.parse(data);
                 }
@@ -207,7 +191,7 @@
         console.error('Init error:', e);
         statusEl.textContent = 'Error: ' + e.message;
     }
-    
+
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
     let youtubePlayer = null;
     let isYouTubeApiReady = false;
@@ -459,35 +443,9 @@
             };
 
             peerConnection.oniceconnectionstatechange = () => {
-                // Safety Check: If peerConnection has already been cleaned up, do nothing.
-                if (!peerConnection) {
-                    console.log('ICE state change event fired after peerConnection was cleared. Ignoring.');
-                    return;
-                }
-
-                const currentState = peerConnection.iceConnectionState;
-                console.log('ICE state changed to:', currentState);
-
-                switch (currentState) {
-                    case 'connected':
-                        statusEl.textContent = 'Streaming';
-                        break;
-                    
-                    case 'disconnected':
-                    case 'failed':
-                    case 'closed':
-                        // This handles the abrupt disconnection (like Wi-Fi off).
-                        console.warn('WebRTC connection lost or closed. State: ' + currentState + '. Cleaning up session.');
-                        statusEl.textContent = 'Connection Lost';
-
-                        // Clean up all resources.
-                        if (peerConnection) {
-                            peerConnection.close();
-                            peerConnection = null;
-                        }
-                        remoteVideo.srcObject = null; // This removes the frozen frame.
-                        stopAudioPlayback();
-                        break;
+                console.log('ICE state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + Audio)';
                 }
             };
 
@@ -558,6 +516,3 @@
 </script>
 </body>
 </html>
-
-
-
