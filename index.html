@@ -59,351 +59,460 @@
     </style>
 </head>
 <body>
-    <!-- HTML ELEMENT FOR THE LOGGER -->
-    <div id="debug-log-overlay"></div>
+<!-- HTML ELEMENT FOR THE LOGGER -->
+<div id="debug-log-overlay"></div>
 
-    <div id="status">Connecting...</div>
-    <video id="remoteVideo" autoplay playsinline muted="false"></video>
-    <div id="youtubePlayer"></div>
+<div id="status">Connecting...</div>
+<video id="remoteVideo" autoplay playsinline muted="false"></video>
+<div id="youtubePlayer"></div>
 
-    <!-- This must be the first script to run -->
-    <script>
-        // JAVASCRIPT FOR THE ON-SCREEN LOGGER
-        (function () {
-            const logContainer = document.getElementById('debug-log-overlay');
-            if (!logContainer) return;
+<!-- This must be the first script to run -->
+<script>
+    // JAVASCRIPT FOR THE ON-SCREEN LOGGER
+    (function () {
+        const logContainer = document.getElementById('debug-log-overlay');
+        if (!logContainer) return;
 
-            function addLogMessage(message, className) {
-                const p = document.createElement('p');
-                p.textContent = message;
-                p.className = 'log-msg ' + className;
-                logContainer.appendChild(p);
-                logContainer.scrollTop = logContainer.scrollHeight;
-            }
+        function addLogMessage(message, className) {
+            const p = document.createElement('p');
+            p.textContent = message;
+            p.className = 'log-msg ' + className;
+            logContainer.appendChild(p);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
 
-            const originalConsole = {
-                log: console.log.bind(console),
-                error: console.error.bind(console),
-                warn: console.warn.bind(console),
-            };
+        const originalConsole = {
+            log: console.log.bind(console),
+            error: console.error.bind(console),
+            warn: console.warn.bind(console),
+        };
 
-            console.log = function(...args) {
-                originalConsole.log(...args);
-                const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-                addLogMessage('LOG: ' + message, 'log-info');
-            };
-            console.error = function(...args) {
-                originalConsole.error(...args);
-                const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-                addLogMessage('ERROR: ' + message, 'log-error');
-            };
-            console.warn = function(...args) {
-                originalConsole.warn(...args);
-                const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-                addLogMessage('WARN: ' + message, 'log-warn');
-            };
+        console.log = function(...args) {
+            originalConsole.log(...args);
+            const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+            addLogMessage('LOG: ' + message, 'log-info');
+        };
+        console.error = function(...args) {
+            originalConsole.error(...args);
+            const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+            addLogMessage('ERROR: ' + message, 'log-error');
+        };
+        console.warn = function(...args) {
+            originalConsole.warn(...args);
+            const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+            addLogMessage('WARN: ' + message, 'log-warn');
+        };
 
-            window.onerror = function(message, source, lineno, colno, error) {
-                const fullMessage = `Uncaught Exception: ${message} at ${source}:${lineno}:${colno}`;
-                console.error(fullMessage, error);
-                return true;
-            };
-        })();
-    </script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            const fullMessage = `Uncaught Exception: ${message} at ${source}:${lineno}:${colno}`;
+            console.error(fullMessage, error);
+            return true;
+        };
+    })();
+</script>
 
-    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <script>
-        // --- YOUR APPLICATION CODE ---
-        const statusEl = document.getElementById('status');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const youtubePlayerEl = document.getElementById('youtubePlayer');
-        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
-        let peerConnection = null;
-        let context = null;
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+    // --- YOUR APPLICATION CODE ---
+    const statusEl = document.getElementById('status');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const youtubePlayerEl = document.getElementById('youtubePlayer');
+    const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+    let peerConnection = null;
+    let context = null;
 
-        try {
-            console.log("Receiver script starting.");
-            context = cast.framework.CastReceiverContext.getInstance();
-            const castReceiverOptions = new cast.framework.CastReceiverOptions();
-            castReceiverOptions.disableIdleTimeout = true;
-            castReceiverOptions.maxInactivity = 3600;
+    // Ensure video is not muted
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
 
-            context.addCustomMessageListener(NAMESPACE, function(customEvent) {
-                try {
-                    let data = customEvent.data;
-                    console.log("Received custom message:", data);
-                    if (typeof data === 'string') {
-                        data = JSON.parse(data);
-                    }
+    // Audio playback components
+    let audioContext = null;
+    let audioQueue = [];
+    let isPlayingAudio = false;
+    let nextPlayTime = 0;
 
-                    if (data.type === 'offer') {
-                        // You need to define cleanupYouTube() and handleOffer()
-                        handleOffer(data);
-                    } else if (data.type === 'ice_candidate') {
-                        // You need to define handleIceCandidate()
-                        handleIceCandidate(data);
-                    } else if (data.type === 'YOUTUBE') {
-                        console.log('Received YOUTUBE message with videoId:', data.videoId);
-                        loadYouTubeVideo(data.videoId);
-                    }
-                } catch (e) {
-                    console.error('Message processing error:', e);
+    try {
+        console.log("Receiver script starting.");
+        context = cast.framework.CastReceiverContext.getInstance();
+        const castReceiverOptions = new cast.framework.CastReceiverOptions();
+        castReceiverOptions.disableIdleTimeout = true;
+        castReceiverOptions.maxInactivity = 3600;
+
+        context.addCustomMessageListener(NAMESPACE, function(customEvent) {
+            try {
+                let data = customEvent.data;
+                console.log("Received custom message:", data);
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
                 }
-            });
 
-            context.addEventListener(cast.framework.system.EventType.READY, () => {
-                statusEl.textContent = 'Ready';
-                console.log('Receiver ready');
-            });
-
-            context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-                statusEl.textContent = 'Connected - Waiting for stream...';
-                console.log('Sender connected:', event.senderId);
-            });
-
-            context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-                statusEl.textContent = 'Disconnected';
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
+                if (data.type === 'offer') {
+                    // You need to define cleanupYouTube() and handleOffer()
+                    handleOffer(data);
+                } else if (data.type === 'ice_candidate') {
+                    // You need to define handleIceCandidate()
+                    handleIceCandidate(data);
+                } else if (data.type === 'audio') {
+                    handleAudioData(data);
+                } else if (data.type === 'YOUTUBE') {
+                    console.log('Received YOUTUBE message with videoId:', data.videoId);
+                    loadYouTubeVideo(data.videoId);
                 }
-                remoteVideo.srcObject = null;
-            });
-
-            context.start(castReceiverOptions);
-            console.log("CastReceiverContext started.");
-
-        } catch (e) {
-            console.error('Fatal initialization error:', e);
-        }
-        
-        // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
-        let youtubePlayer = null;
-        let isYouTubeApiReady = false;
-        let isYouTubeApiLoading = false;
-        let pendingVideoId = null;
-
-        function loadYouTubeVideo(videoId) {
-            console.log(`[DEBUG] 1. loadYouTubeVideo called with ID: ${videoId}`);
-            pendingVideoId = videoId;
-            statusEl.style.display = 'none';
-            remoteVideo.style.display = 'none';
-            youtubePlayerEl.style.display = 'block';
-            console.log('[DEBUG] 2. Player container is now visible (black screen is expected here).');
-            if (isYouTubeApiReady && youtubePlayer) {
-                console.log('[DEBUG] 3a. API is ready. Playing pending video now.');
-                playPendingVideo();
-            } else if (!isYouTubeApiLoading) {
-                console.log('[DEBUG] 3b. API not ready. Injecting API script from youtube.com.');
-                isYouTubeApiLoading = true;
-                const tag = document.createElement('script');
-                tag.src = "https://www.youtube.com/iframe_api";
-                tag.onerror = function() {
-                    console.error('[FATAL] FAILED TO LOAD THE YOUTUBE IFRAME API SCRIPT. Check network or server security policies.');
-                };
-                const firstScriptTag = document.getElementsByTagName('script')[0];
-                firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-            } else {
-                console.log('[DEBUG] 3c. API is currently loading. Waiting for it to complete.');
+            } catch (e) {
+                console.error('Message processing error:', e);
             }
-        }
+        });
 
-        window.onYouTubeIframeAPIReady = function() {
-            console.log('[DEBUG] 4. onYouTubeIframeAPIReady has been called by the YouTube script.');
-            isYouTubeApiReady = true;
-            isYouTubeApiLoading = false;
-            if (!youtubePlayer) {
-                console.log('[DEBUG] 5. Creating new YT.Player object.');
-                try {
-                    youtubePlayer = new YT.Player('youtubePlayer', {
-                        height: '100%',
-                        width: '100%',
-                        videoId: pendingVideoId,
-                        playerVars: { 'autoplay': 1, 'controls': 1 },
-                        events: { 'onReady': onPlayerReady, 'onError': onPlayerError }
-                    });
-                } catch (e) {
-                     console.error('[FATAL] Error creating YT.Player. Is YT defined?', e);
-                }
-            }
-        }
+        context.addEventListener(cast.framework.system.EventType.READY, () => {
+            statusEl.textContent = 'Ready';
+            console.log('Receiver ready');
+            initializeAudioContext();
+        });
 
-        function onPlayerReady(event) {
-            console.log('[DEBUG] 6. YouTube Player is ready and firing onReady event.');
-            playPendingVideo();
-        }
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
+            statusEl.textContent = 'Connected - Waiting for stream...';
+            console.log('Sender connected:', event.senderId);
+        });
 
-        function onPlayerError(event) {
-            console.error('[FATAL] YouTube Player Error:', event.data);
-        }
-
-        function playPendingVideo() {
-            if (youtubePlayer && pendingVideoId) {
-                console.log(`[DEBUG] 7. Calling loadVideoById with '${pendingVideoId}'.`);
-                youtubePlayer.loadVideoById(pendingVideoId);
-                pendingVideoId = null;
-            } else {
-                 console.warn('[DEBUG] playPendingVideo called, but player or pendingVideoId is missing.');
-            }
-        }
-        /**
-         * A helper function to clean up the YouTube player state.
-         */
-        function cleanupYouTube() {
-            if (youtubePlayer) {
-                youtubePlayer.stopVideo();
-            }
-            youtubePlayerEl.style.display = 'none';
-            // Show other elements if needed
-            statusEl.style.display = 'block';
-            remoteVideo.style.display = 'block';
-        }
-
-        /**
-         * A helper function to clean up the WebRTC state.
-         */
-        function cleanupWebRTC() {
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+            statusEl.textContent = 'Disconnected';
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
             }
             remoteVideo.srcObject = null;
+            stopAudioPlayback();
+        });
+
+        context.start(castReceiverOptions);
+        console.log("CastReceiverContext started.");
+
+    } catch (e) {
+        console.error('Init error:', e);
+        statusEl.textContent = 'Error: ' + e.message;
+    }
+    
+    // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
+    let youtubePlayer = null;
+    let isYouTubeApiReady = false;
+    let isYouTubeApiLoading = false;
+    let pendingVideoId = null;
+
+    function loadYouTubeVideo(videoId) {
+        console.log(`[DEBUG] 1. loadYouTubeVideo called with ID: ${videoId}`);
+        pendingVideoId = videoId;
+        statusEl.style.display = 'none';
+        remoteVideo.style.display = 'none';
+        youtubePlayerEl.style.display = 'block';
+        console.log('[DEBUG] 2. Player container is now visible (black screen is expected here).');
+        if (isYouTubeApiReady && youtubePlayer) {
+            console.log('[DEBUG] 3a. API is ready. Playing pending video now.');
+            playPendingVideo();
+        } else if (!isYouTubeApiLoading) {
+            console.log('[DEBUG] 3b. API not ready. Injecting API script from youtube.com.');
+            isYouTubeApiLoading = true;
+            const tag = document.createElement('script');
+            tag.src = "https://www.youtube.com/iframe_api";
+            tag.onerror = function() {
+                console.error('[FATAL] FAILED TO LOAD THE YOUTUBE IFRAME API SCRIPT. Check network or server security policies.');
+            };
+            const firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+        } else {
+            console.log('[DEBUG] 3c. API is currently loading. Waiting for it to complete.');
+        }
+    }
+
+    window.onYouTubeIframeAPIReady = function() {
+        console.log('[DEBUG] 4. onYouTubeIframeAPIReady has been called by the YouTube script.');
+        isYouTubeApiReady = true;
+        isYouTubeApiLoading = false;
+        if (!youtubePlayer) {
+            console.log('[DEBUG] 5. Creating new YT.Player object.');
+            try {
+                youtubePlayer = new YT.Player('youtubePlayer', {
+                    height: '100%',
+                    width: '100%',
+                    videoId: pendingVideoId,
+                    playerVars: { 'autoplay': 1, 'controls': 1 },
+                    events: { 'onReady': onPlayerReady, 'onError': onPlayerError }
+                });
+            } catch (e) {
+                 console.error('[FATAL] Error creating YT.Player. Is YT defined?', e);
+            }
+        }
+    }
+
+    function onPlayerReady(event) {
+        console.log('[DEBUG] 6. YouTube Player is ready and firing onReady event.');
+        playPendingVideo();
+    }
+
+    function onPlayerError(event) {
+        console.error('[FATAL] YouTube Player Error:', event.data);
+    }
+
+    function playPendingVideo() {
+        if (youtubePlayer && pendingVideoId) {
+            console.log(`[DEBUG] 7. Calling loadVideoById with '${pendingVideoId}'.`);
+            youtubePlayer.loadVideoById(pendingVideoId);
+            pendingVideoId = null;
+        } else {
+             console.warn('[DEBUG] playPendingVideo called, but player or pendingVideoId is missing.');
+        }
+    }
+    /**
+     * A helper function to clean up the YouTube player state.
+     */
+    function cleanupYouTube() {
+        if (youtubePlayer) {
+            youtubePlayer.stopVideo();
+        }
+        youtubePlayerEl.style.display = 'none';
+        // Show other elements if needed
+        statusEl.style.display = 'block';
+        remoteVideo.style.display = 'block';
+    }
+
+    /**
+     * A helper function to clean up the WebRTC state.
+     */
+    function cleanupWebRTC() {
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+        remoteVideo.srcObject = null;
+    }
+
+    function initializeAudioContext() {
+        try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 48000,
+                latencyHint: 'interactive'
+            });
+            console.log('✓ AudioContext initialized:', audioContext.sampleRate, 'Hz');
+        } catch (e) {
+            console.error('Failed to initialize AudioContext:', e);
+        }
+    }
+
+    function handleAudioData(data) {
+        if (!audioContext) {
+            console.warn('AudioContext not initialized, initializing now...');
+            initializeAudioContext();
+            if (!audioContext) {
+                console.error('Failed to initialize AudioContext');
+                return;
+            }
         }
 
-        async function handleOffer(data) {
+        try {
+            // Decode base64 audio data
+            const binaryString = atob(data.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Convert PCM bytes to Float32Array
+            const int16Array = new Int16Array(bytes.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0; // Convert to -1.0 to 1.0 range
+            }
+
+            // Split stereo data into left and right channels
+            const channels = data.channels || 2;
+            const samplesPerChannel = float32Array.length / channels;
+
+            // Create AudioBuffer
+            const audioBuffer = audioContext.createBuffer(channels, samplesPerChannel, data.sampleRate || 48000);
+
+            if (channels === 2) {
+                const leftChannel = audioBuffer.getChannelData(0);
+                const rightChannel = audioBuffer.getChannelData(1);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    leftChannel[i] = float32Array[i * 2];
+                    rightChannel[i] = float32Array[i * 2 + 1];
+                }
+            } else {
+                const channelData = audioBuffer.getChannelData(0);
+                for (let i = 0; i < samplesPerChannel; i++) {
+                    channelData[i] = float32Array[i];
+                }
+            }
+
+            playAudioBuffer(audioBuffer);
+
+            // Log occasionally to confirm audio is being received
+            if (!window.audioPacketCount) window.audioPacketCount = 0;
+            window.audioPacketCount++;
+            if (window.audioPacketCount % 100 === 0) {
+                console.log('✓ System audio packets received:', window.audioPacketCount);
+            }
+        } catch (e) {
+            console.error('Error processing audio data:', e);
+        }
+    }
+
+    function playAudioBuffer(audioBuffer) {
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+
+        // Schedule playback
+        const currentTime = audioContext.currentTime;
+        if (nextPlayTime < currentTime) {
+            nextPlayTime = currentTime;
+        }
+
+        source.start(nextPlayTime);
+        nextPlayTime += audioBuffer.duration;
+    }
+
+    function stopAudioPlayback() {
+        audioQueue = [];
+        isPlayingAudio = false;
+        nextPlayTime = 0;
+        if (audioContext) {
             try {
-                console.log('Handling offer');
+                audioContext.close();
+                audioContext = null;
+            } catch (e) {
+                console.error('Error closing AudioContext:', e);
+            }
+        }
+    }
 
-                const configuration = {
-                    iceServers: [{
-                        urls: 'stun:stun.l.google.com:19302'
-                    }],
-                    bundlePolicy: 'max-bundle',
-                    rtcpMuxPolicy: 'require'
-                };
-                peerConnection = new RTCPeerConnection(configuration);
+    async function handleOffer(data) {
+        try {
+            console.log('Handling offer');
 
-                let streamSet = false;
+            const configuration = {
+                iceServers: [{
+                    urls: 'stun:stun.l.google.com:19302'
+                }],
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            };
+            peerConnection = new RTCPeerConnection(configuration);
 
-                peerConnection.ontrack = (event) => {
-                    console.log('Track received:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
+            let streamSet = false;
 
-                    if (event.streams && event.streams[0]) {
-                        if (!streamSet) {
-                            console.log('Setting video stream with', event.streams[0].getTracks().length, 'tracks');
+            peerConnection.ontrack = (event) => {
+                console.log('Track received:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
 
-                            // Log all tracks
-                            event.streams[0].getTracks().forEach(track => {
-                                console.log('Stream track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                if (event.streams && event.streams[0]) {
+                    if (!streamSet) {
+                        console.log('Setting video stream with', event.streams[0].getTracks().length, 'tracks');
+
+                        // Log all tracks
+                        event.streams[0].getTracks().forEach(track => {
+                            console.log('Stream track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                        });
+
+                        remoteVideo.srcObject = event.streams[0];
+                        streamSet = true;
+
+                        // Ensure video is not muted and has volume
+                        remoteVideo.muted = false;
+                        remoteVideo.volume = 1.0;
+
+                        remoteVideo.play().then(() => {
+                            console.log('✓ Video playback started');
+                            console.log('Video element - muted:', remoteVideo.muted, 'volume:', remoteVideo.volume);
+
+                            // Check audio tracks
+                            const audioTracks = event.streams[0].getAudioTracks();
+                            console.log('Audio tracks:', audioTracks.length);
+                            audioTracks.forEach((track, idx) => {
+                                console.log(`Audio track ${idx}:`, {
+                                    id: track.id,
+                                    label: track.label,
+                                    enabled: track.enabled,
+                                    muted: track.muted,
+                                    readyState: track.readyState
+                                });
                             });
 
-                            remoteVideo.srcObject = event.streams[0];
-                            streamSet = true;
-
-                            // Ensure video is not muted and has volume
-                            remoteVideo.muted = false;
-                            remoteVideo.volume = 1.0;
-
-                            remoteVideo.play().then(() => {
-                                console.log('✓ Video playback started');
-                                console.log('Video element - muted:', remoteVideo.muted, 'volume:', remoteVideo.volume);
-
-                                // Check audio tracks
-                                const audioTracks = event.streams[0].getAudioTracks();
-                                console.log('Audio tracks:', audioTracks.length);
-                                audioTracks.forEach((track, idx) => {
-                                    console.log(`Audio track ${idx}:`, {
-                                        id: track.id,
-                                        label: track.label,
-                                        enabled: track.enabled,
-                                        muted: track.muted,
-                                        readyState: track.readyState
-                                    });
-                                });
-
-                                statusEl.textContent = 'Streaming (Video + Audio)';
-                            }).catch(e => console.error('Play failed:', e));
-                        }
+                            statusEl.textContent = 'Streaming (Video + Audio)';
+                        }).catch(e => console.error('Play failed:', e));
                     }
-                };
-
-                peerConnection.oniceconnectionstatechange = () => {
-                    console.log('ICE state:', peerConnection.iceConnectionState);
-                    if (peerConnection.iceConnectionState === 'connected') {
-                        statusEl.textContent = 'Streaming (Video + Audio)';
-                    }
-                };
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        sendMessage({
-                            type: 'ice_candidate',
-                            candidate: event.candidate.candidate,
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex
-                        });
-                    }
-                };
-
-                await peerConnection.setRemoteDescription(new RTCSessionDescription({
-                    type: 'offer',
-                    sdp: data.sdp
-                }));
-                console.log('Remote description set');
-
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                console.log('Answer created');
-
-                sendMessage({
-                    type: 'answer',
-                    sdp: answer.sdp
-                });
-
-                setTimeout(() => {
-                    const receivers = peerConnection.getReceivers();
-                    console.log('Total receivers:', receivers.length);
-                    receivers.forEach((receiver, index) => {
-                        if (receiver.track) {
-                            console.log(`Receiver ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState, 'enabled:', receiver.track.enabled);
-                        }
-                    });
-                }, 1500);
-
-            } catch (e) {
-                console.error('Offer handling error:', e);
-                statusEl.textContent = 'Error: ' + e.message;
-            }
-        }
-
-        async function handleIceCandidate(data) {
-            try {
-                if (peerConnection && data.candidate) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate({
-                        candidate: data.candidate,
-                        sdpMid: data.sdpMid,
-                        sdpMLineIndex: data.sdpMLineIndex
-                    }));
                 }
-            } catch (e) {
-                console.error('ICE candidate error:', e);
-            }
-        }
+            };
 
-        function sendMessage(messageObject) {
-            try {
-                const messageStr = JSON.stringify(messageObject);
-                context.sendCustomMessage(NAMESPACE, undefined, messageStr);
-            } catch (e) {
-                console.error('Send message error:', e);
-            }
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    statusEl.textContent = 'Streaming (Video + Audio)';
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendMessage({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex
+                    });
+                }
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+            console.log('Remote description set');
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            console.log('Answer created');
+
+            sendMessage({
+                type: 'answer',
+                sdp: answer.sdp
+            });
+
+            setTimeout(() => {
+                const receivers = peerConnection.getReceivers();
+                console.log('Total receivers:', receivers.length);
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`Receiver ${index}:`, receiver.track.kind, 'state:', receiver.track.readyState, 'enabled:', receiver.track.enabled);
+                    }
+                });
+            }, 1500);
+
+        } catch (e) {
+            console.error('Offer handling error:', e);
+            statusEl.textContent = 'Error: ' + e.message;
         }
-    </script>
+    }
+
+    async function handleIceCandidate(data) {
+        try {
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate({
+                    candidate: data.candidate,
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex
+                }));
+            }
+        } catch (e) {
+            console.error('ICE candidate error:', e);
+        }
+    }
+
+    function sendMessage(messageObject) {
+        try {
+            const messageStr = JSON.stringify(messageObject);
+            context.sendCustomMessage(NAMESPACE, undefined, messageStr);
+        } catch (e) {
+            console.error('Send message error:', e);
+        }
+    }
+</script>
 </body>
-
 </html>
-
-
-
-
-
