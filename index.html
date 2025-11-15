@@ -37,6 +37,20 @@
     <div id="status">Connecting...</div>
     <video id="remoteVideo" autoplay playsinline muted="false"></video>
 
+    <!-- ⬇️⬇️⬇️ FIX 1: ADD THIS DIV FOR THE YOUTUBE PLAYER ⬇️⬇️⬇️ -->
+    <div id="youtubePlayer"></div>
+
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <script>
+        const statusEl = document.getElementById('status');
+        const remoteVideo = document.getElementById('remoteVideo');
+        // --- Get a reference to the new div ---
+        const youtubePlayerEl = document.getElementById('youtubePlayer');
+        const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
+        let peerConnection = null;
+        let context = null;
+        let youtubePlayer = null; // Declare youtubePlayer globally
+        
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script>
         const statusEl = document.getElementById('status');
@@ -384,5 +398,6 @@
 </body>
 
 </html>
+
 
 
