@@ -472,6 +472,8 @@
     var lastSeekTime = 0;
     var isCurrentlySeeking = false;
     var isTVShowingAd = false;
+    var seekDebounceTimer = null;
+    var lastPlayerState = -1;
 
     // Check if TV is showing ad
     function checkTVAd() {
@@ -528,26 +530,37 @@
         console.log('[YT_EVENT] Player state changed:', event.data);
 
         const currentTime = youtubePlayer ? youtubePlayer.getCurrentTime() : 0;
+        const timeDiff = Math.abs(currentTime - lastSeekTime);
 
-        // Detect seeking (big jump in time during buffering)
-        if (Math.abs(currentTime - lastSeekTime) > 2 && event.data === 3) {
-            if (!isCurrentlySeeking) {
-                isCurrentlySeeking = true;
+        // Only detect real seeks: big time jump + state change to buffering
+        // Must have previous state (not initial load) and significant time difference
+        if (lastPlayerState !== -1 && timeDiff > 3 && event.data === 3 && !isCurrentlySeeking) {
+            console.log('[YT_EVENT] Real seek detected on TV, diff:', timeDiff);
+            isCurrentlySeeking = true;
+
+            // Debounce: Only send after seeking stabilizes
+            clearTimeout(seekDebounceTimer);
+            seekDebounceTimer = setTimeout(function() {
                 sendEventToPhone('YT_SEEK_START', {
                     currentTime: currentTime
                 });
-            }
+            }, 300);
         }
 
-        // Seek complete (buffering -> playing/paused)
+        // Seek complete: buffering -> playing/paused
         if (isCurrentlySeeking && (event.data === 1 || event.data === 2)) {
+            console.log('[YT_EVENT] Seek complete on TV');
+
+            clearTimeout(seekDebounceTimer);
             isCurrentlySeeking = false;
+
             sendEventToPhone('YT_SEEK_COMPLETE', {
                 currentTime: currentTime
             });
         }
 
         lastSeekTime = currentTime;
+        lastPlayerState = event.data;
 
         // Send state change to phone
         sendEventToPhone('YT_STATE_CHANGE', {
@@ -701,7 +714,7 @@
         } catch (e) {
             console.error('Failed to initialize AudioContext:', e);
         }
-    
+
 
     function handleAudioData(data) {
         if (!audioContext) {
