@@ -448,7 +448,11 @@
                     width: '100%',
                     videoId: pendingVideoId,
                     playerVars: { 'autoplay': 1, 'controls': 1 },
-                    events: { 'onReady': onPlayerReady, 'onError': onPlayerError }
+                    events: {
+                        'onReady': onPlayerReady,
+                        'onError': onPlayerError,
+                        'onStateChange': onPlayerStateChange
+                    }
                 });
             } catch (e) {
                  console.error('[FATAL] Error creating YT.Player. Is YT defined?', e);
@@ -463,6 +467,111 @@
 
     function onPlayerError(event) {
         console.error('[FATAL] YouTube Player Error:', event.data);
+    }
+
+    var lastSeekTime = 0;
+    var isCurrentlySeeking = false;
+    var isTVShowingAd = false;
+
+    // Check if TV is showing ad
+    function checkTVAd() {
+        try {
+            if (!youtubePlayer) return false;
+
+            // Method 1: Check player container for ad class
+            var playerContainer = document.querySelector('.html5-video-player');
+            if (playerContainer && playerContainer.classList.contains('ad-showing')) {
+                return true;
+            }
+
+            // Method 2: Check for ad badge/overlay
+            var adBadge = document.querySelector('.ytp-ad-text, .ytp-ad-preview-text, .ytp-ad-message-container');
+            if (adBadge && adBadge.offsetParent !== null) {
+                return true;
+            }
+
+            // Method 3: Check for skip button
+            var skipButton = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern');
+            if (skipButton && skipButton.offsetParent !== null) {
+                return true;
+            }
+
+            // Method 4: Check ad info panel
+            var adInfo = document.querySelector('.ytp-ad-info-dialog-container');
+            if (adInfo && adInfo.offsetParent !== null) {
+                return true;
+            }
+
+            return false;
+        } catch(e) {
+            console.error('Error checking TV ad state:', e);
+            return false;
+        }
+    }
+
+    // Monitor ad state periodically
+    setInterval(function() {
+        var isShowingAd = checkTVAd();
+
+        if (isShowingAd && !isTVShowingAd) {
+            console.log('[YT_AD] 🚫 Ad started on TV');
+            isTVShowingAd = true;
+            sendEventToPhone('YT_AD_STARTED', {});
+        } else if (!isShowingAd && isTVShowingAd) {
+            console.log('[YT_AD] ✅ Ad ended on TV');
+            isTVShowingAd = false;
+            sendEventToPhone('YT_AD_ENDED', {});
+        }
+    }, 500);
+
+    function onPlayerStateChange(event) {
+        console.log('[YT_EVENT] Player state changed:', event.data);
+
+        const currentTime = youtubePlayer ? youtubePlayer.getCurrentTime() : 0;
+
+        // Detect seeking (big jump in time during buffering)
+        if (Math.abs(currentTime - lastSeekTime) > 2 && event.data === 3) {
+            if (!isCurrentlySeeking) {
+                isCurrentlySeeking = true;
+                sendEventToPhone('YT_SEEK_START', {
+                    currentTime: currentTime
+                });
+            }
+        }
+
+        // Seek complete (buffering -> playing/paused)
+        if (isCurrentlySeeking && (event.data === 1 || event.data === 2)) {
+            isCurrentlySeeking = false;
+            sendEventToPhone('YT_SEEK_COMPLETE', {
+                currentTime: currentTime
+            });
+        }
+
+        lastSeekTime = currentTime;
+
+        // Send state change to phone
+        sendEventToPhone('YT_STATE_CHANGE', {
+            state: event.data, // -1: unstarted, 0: ended, 1: playing, 2: paused, 3: buffering, 5: cued
+            currentTime: currentTime,
+            duration: youtubePlayer ? youtubePlayer.getDuration() : 0,
+            volume: youtubePlayer ? youtubePlayer.getVolume() : 0
+        });
+    }
+
+    function sendEventToPhone(type, data) {
+        try {
+            const castContext = cast.framework.CastReceiverContext.getInstance();
+            const message = {
+                type: type,
+                ...data
+            };
+
+            // Send to all connected senders
+            castContext.sendCustomMessage('urn:x-cast:com.xxx.screenmirroring', undefined, message);
+            console.log('[YT_EVENT] Event sent to phone:', message);
+        } catch (e) {
+            console.error('[YT_EVENT] Error sending event:', e);
+        }
     }
 
     function playPendingVideo() {
@@ -592,7 +701,7 @@
         } catch (e) {
             console.error('Failed to initialize AudioContext:', e);
         }
-    
+    }
 
     function handleAudioData(data) {
         if (!audioContext) {
@@ -816,4 +925,3 @@
 </script>
 </body>
 </html>
-
