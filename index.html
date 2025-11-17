@@ -224,6 +224,11 @@
                 } else if (data.type === 'YOUTUBE') {
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
+                } else if (data.type === 'SHOW_IMAGE') {
+                    console.log('📷 Received SHOW_IMAGE message');
+                    console.log('   URL:', data.url);
+                    console.log('   Title:', data.title);
+                    showImageFromCustomMessage(data);
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
@@ -275,18 +280,18 @@
                     if (media.contentType) {
                         // Check if it's image content
                         if (media.contentType.startsWith('image/')) {
-                            console.log('📷 Image content detected - showing image');
-                            showImage(media);
-                            // Return null to prevent default media player from handling
-                            return null;
+                            console.log('📷 Image content detected - will handle after load');
+                            // Store media for later use
+                            window.pendingImageMedia = media;
                         }
-                    // Check if it's audio content
-                    else if (media.contentType.startsWith('audio/')) {
-                        console.log('Audio content detected - showing audio overlay');
-                        showAudioOverlay(media);
-                    } else {
-                        hideAudioOverlay();
-                        hideImage();
+                        // Check if it's audio content
+                        else if (media.contentType.startsWith('audio/')) {
+                            console.log('Audio content detected - showing audio overlay');
+                            showAudioOverlay(media);
+                        } else {
+                            hideAudioOverlay();
+                            hideImage();
+                        }
                     }
                 }
                 return loadRequestData;
@@ -303,8 +308,11 @@
                     if (mediaInformation.contentType.startsWith('audio/')) {
                         showAudioOverlay(mediaInformation);
                     } else if (mediaInformation.contentType.startsWith('image/')) {
-                        console.log('📷 Image load complete');
-                        // Image is already shown in LOAD interceptor
+                        console.log('📷 Image load complete - showing image now');
+                        // Use stored media from LOAD interceptor
+                        const imageMedia = window.pendingImageMedia || mediaInformation;
+                        showImage(imageMedia);
+                        window.pendingImageMedia = null;
                     }
                 }
             }
@@ -402,6 +410,44 @@
         const imageDisplay = document.getElementById('imageDisplay');
         imageDisplay.style.display = 'none';
         imageDisplay.src = '';
+    }
+
+    // Function to show image from custom message
+    function showImageFromCustomMessage(data) {
+        console.log('📷 showImageFromCustomMessage called');
+        console.log('   URL:', data.url);
+        console.log('   Title:', data.title);
+        console.log('   ContentType:', data.contentType);
+
+        const imageDisplay = document.getElementById('imageDisplay');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const youtubePlayerEl = document.getElementById('youtubePlayer');
+        const audioOverlay = document.getElementById('audio-overlay');
+
+        // Hide other elements
+        remoteVideo.style.display = 'none';
+        youtubePlayerEl.style.display = 'none';
+        audioOverlay.classList.remove('active');
+
+        if (!data.url) {
+            console.error('❌ No URL in SHOW_IMAGE message');
+            return;
+        }
+
+        // Show and load image
+        imageDisplay.style.display = 'block';
+        imageDisplay.src = data.url;
+
+        imageDisplay.onload = function() {
+            console.log('✅ Image loaded successfully from:', data.url);
+        };
+
+        imageDisplay.onerror = function(error) {
+            console.error('❌ Failed to load image:', error);
+            console.error('   URL was:', data.url);
+        };
+
+        console.log('📷 Image element updated, src set to:', data.url);
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
