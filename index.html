@@ -285,6 +285,11 @@
             }
         );
 
+        // Use custom message listener for YouTube controls (not standard Cast SDK commands)
+        // Standard Cast SDK PLAY/PAUSE/SEEK don't work with YouTube IFrame API
+        // We need to use custom namespace messages instead
+
+
         // Listen for player state changes
         playerManager.addEventListener(
             cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
