@@ -261,19 +261,25 @@
         playerManager.setMessageInterceptor(
             cast.framework.messages.MessageType.LOAD,
             loadRequestData => {
-                console.log('Media load request:', loadRequestData);
-                const media = loadRequestData.media;
-                if (media && media.contentType) {
-                    console.log('Content type:', media.contentType);
-                    console.log('Content URL:', media.contentUrl);
+                console.log('📡 LOAD request received');
+                console.log('   Full loadRequestData:', JSON.stringify(loadRequestData, null, 2));
 
-                    // Check if it's image content
-                    if (media.contentType.startsWith('image/')) {
-                        console.log('📷 Image content detected - showing image');
-                        showImage(media);
-                        // Return null to prevent default media player from handling
-                        return null;
-                    }
+                const media = loadRequestData.media;
+                if (media) {
+                    console.log('   media.contentType:', media.contentType);
+                    console.log('   media.contentUrl:', media.contentUrl);
+                    console.log('   media.contentId:', media.contentId);
+                    console.log('   media.streamType:', media.streamType);
+                    console.log('   media.metadata:', media.metadata);
+
+                    if (media.contentType) {
+                        // Check if it's image content
+                        if (media.contentType.startsWith('image/')) {
+                            console.log('📷 Image content detected - showing image');
+                            showImage(media);
+                            // Return null to prevent default media player from handling
+                            return null;
+                        }
                     // Check if it's audio content
                     else if (media.contentType.startsWith('audio/')) {
                         console.log('Audio content detected - showing audio overlay');
@@ -346,7 +352,9 @@
     // Function to show image
     function showImage(media) {
         console.log('📷 showImage called');
-        console.log('   URL:', media.contentUrl);
+        console.log('   Full media object:', JSON.stringify(media, null, 2));
+        console.log('   media.contentUrl:', media.contentUrl);
+        console.log('   media.contentId:', media.contentId);
         console.log('   Type:', media.contentType);
         console.log('   Metadata:', media.metadata);
 
@@ -360,20 +368,32 @@
         youtubePlayerEl.style.display = 'none';
         audioOverlay.classList.remove('active');
 
+        // Get the URL - try contentUrl first, then contentId
+        const imageUrl = media.contentUrl || media.contentId;
+        console.log('📷 Using URL:', imageUrl);
+
+        if (!imageUrl) {
+            console.error('❌ No URL found! contentUrl and contentId are both null/undefined');
+            console.error('   Check Android side MediaInfo.Builder() - URL must be set');
+            return;
+        }
+
         // Show and load image
         imageDisplay.style.display = 'block';
-        imageDisplay.src = media.contentUrl;
+        imageDisplay.src = imageUrl;
 
         imageDisplay.onload = function() {
-            console.log('✅ Image loaded successfully');
+            console.log('✅ Image loaded successfully from:', imageUrl);
         };
 
         imageDisplay.onerror = function(error) {
             console.error('❌ Failed to load image:', error);
-            console.error('   URL was:', media.contentUrl);
+            console.error('   URL was:', imageUrl);
+            console.error('   Check if URL is accessible from TV network');
+            console.error('   Check if HTTP server is running on Android device');
         };
 
-        console.log('📷 Image element updated, src set to:', media.contentUrl);
+        console.log('📷 Image element updated, src set to:', imageUrl);
     }
 
     // Function to hide image
