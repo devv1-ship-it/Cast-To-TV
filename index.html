@@ -120,6 +120,8 @@
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
     let context = null;
+    let heartbeatTimeout = null;
+    const HEARTBEAT_TIMEOUT_MS = 15000; // 15 seconds, must be > sender's interval
 
     // Ensure video is not muted
     remoteVideo.muted = false;
@@ -141,22 +143,32 @@
         context.addCustomMessageListener(NAMESPACE, function(customEvent) {
             try {
                 let data = customEvent.data;
-                console.log("Received custom message:", data);
+                // console.log("Received custom message:", data); // Can be noisy
                 if (typeof data === 'string') {
                     data = JSON.parse(data);
                 }
 
+                // Reset heartbeat timer on any valid message from the sender.
+                resetHeartbeatTimeout();
+
                 if (data.type === 'offer') {
-                    // You need to define cleanupYouTube() and handleOffer()
+                    cleanupYouTube();
                     handleOffer(data);
                 } else if (data.type === 'ice_candidate') {
-                    // You need to define handleIceCandidate()
                     handleIceCandidate(data);
                 } else if (data.type === 'audio') {
                     handleAudioData(data);
                 } else if (data.type === 'YOUTUBE') {
+                    cleanupWebRTC();
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
+                } else if (data.type === 'disconnect') {
+                    console.log('Received disconnect message. Cleaning up WebRTC session.');
+                    stopHeartbeat();
+                    cleanupWebRTC();
+                    statusEl.textContent = 'Disconnected by sender';
+                } else if (data.type === 'ping') {
+                    // Ping is only used to reset the timer. No other action needed.
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
@@ -176,6 +188,7 @@
 
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
             statusEl.textContent = 'Disconnected';
+            stopHeartbeat();
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
@@ -190,6 +203,21 @@
     } catch (e) {
         console.error('Init error:', e);
         statusEl.textContent = 'Error: ' + e.message;
+    }
+
+    function resetHeartbeatTimeout() {
+        clearTimeout(heartbeatTimeout);
+        heartbeatTimeout = setTimeout(() => {
+            console.warn('Heartbeat timeout! Connection likely lost. Cleaning up.');
+            statusEl.textContent = 'Connection Lost';
+            cleanupWebRTC();
+            stopAudioPlayback();
+        }, HEARTBEAT_TIMEOUT_MS);
+    }
+
+    function stopHeartbeat() {
+        console.log("Stopping heartbeat timer.");
+        clearTimeout(heartbeatTimeout);
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
@@ -283,6 +311,7 @@
             peerConnection = null;
         }
         remoteVideo.srcObject = null;
+        stopHeartbeat(); // Also stop the timer when cleaning up
     }
 
     function initializeAudioContext() {
@@ -397,6 +426,9 @@
                 rtcpMuxPolicy: 'require'
             };
             peerConnection = new RTCPeerConnection(configuration);
+
+            // Start the heartbeat timer as soon as we start handling the offer
+            resetHeartbeatTimeout();
 
             let streamSet = false;
 
