@@ -242,7 +242,7 @@
 
         // Get the PlayerManager to handle media playback events
         const playerManager = context.getPlayerManager();
-        
+
         // Listen for when media is loaded
         playerManager.setMessageInterceptor(
             cast.framework.messages.MessageType.LOAD,
@@ -297,11 +297,11 @@
     // Function to show audio overlay with media info
     function showAudioOverlay(media) {
         audioOverlay.classList.add('active');
-        
+
         // Update title if available
         const titleElement = audioOverlay.querySelector('.audio-title');
         const infoElement = audioOverlay.querySelector('.audio-info');
-        
+
         if (media.metadata && media.metadata.title) {
             titleElement.textContent = media.metadata.title;
             infoElement.textContent = 'Now Playing';
@@ -638,7 +638,6 @@
         }
     }
 </script>
-<script src="youtube-controls.js"></script>
+<!--<script src="youtube-controls.js"></script>-->
 </body>
 </html>
-
