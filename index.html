@@ -36,6 +36,53 @@
             z-index: 100;
         }
 
+        /* Audio visualization overlay */
+        #audio-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            z-index: 50;
+        }
+
+        #audio-overlay.active {
+            display: flex;
+        }
+
+        .audio-icon {
+            width: 200px;
+            height: 200px;
+            margin-bottom: 30px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .audio-title {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+            padding: 0 40px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .audio-info {
+            font-size: 1.5em;
+            opacity: 0.9;
+            text-align: center;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+
         /* CSS FOR THE ON-SCREEN LOGGER */
         #debug-log-overlay {
             position: fixed;
@@ -65,6 +112,11 @@
 <div id="status">Connecting...</div>
 <video id="remoteVideo" autoplay playsinline muted="false"></video>
 <div id="youtubePlayer"></div>
+<div id="audio-overlay">
+    <div class="audio-icon">🔊</div>
+    <div class="audio-title">Audio Streaming</div>
+    <div class="audio-info">Now playing audio content</div>
+</div>
 
 <!-- This must be the first script to run -->
 <script>
@@ -117,6 +169,7 @@
     const statusEl = document.getElementById('status');
     const remoteVideo = document.getElementById('remoteVideo');
     const youtubePlayerEl = document.getElementById('youtubePlayer');
+    const audioOverlay = document.getElementById('audio-overlay');
     const NAMESPACE = 'urn:x-cast:com.xxx.screenmirroring';
     let peerConnection = null;
     let context = null;
@@ -187,9 +240,80 @@
         context.start(castReceiverOptions);
         console.log("CastReceiverContext started.");
 
+        // Get the PlayerManager to handle media playback events
+        const playerManager = context.getPlayerManager();
+        
+        // Listen for when media is loaded
+        playerManager.setMessageInterceptor(
+            cast.framework.messages.MessageType.LOAD,
+            loadRequestData => {
+                console.log('Media load request:', loadRequestData);
+                const media = loadRequestData.media;
+                if (media && media.contentType) {
+                    console.log('Content type:', media.contentType);
+                    // Check if it's audio content
+                    if (media.contentType.startsWith('audio/')) {
+                        console.log('Audio content detected - showing audio overlay');
+                        showAudioOverlay(media);
+                    } else {
+                        hideAudioOverlay();
+                    }
+                }
+                return loadRequestData;
+            }
+        );
+
+        // Listen for player state changes
+        playerManager.addEventListener(
+            cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
+            () => {
+                console.log('Player load complete');
+                const mediaInformation = playerManager.getMediaInformation();
+                if (mediaInformation && mediaInformation.contentType) {
+                    if (mediaInformation.contentType.startsWith('audio/')) {
+                        showAudioOverlay(mediaInformation);
+                    }
+                }
+            }
+        );
+
+        playerManager.addEventListener(
+            cast.framework.events.EventType.MEDIA_FINISHED,
+            () => {
+                console.log('Media finished');
+                // Check if there's a queue with more items
+                const queueItems = playerManager.getQueueItems();
+                if (!queueItems || queueItems.length === 0) {
+                    hideAudioOverlay();
+                }
+            }
+        );
+
     } catch (e) {
         console.error('Init error:', e);
         statusEl.textContent = 'Error: ' + e.message;
+    }
+
+    // Function to show audio overlay with media info
+    function showAudioOverlay(media) {
+        audioOverlay.classList.add('active');
+        
+        // Update title if available
+        const titleElement = audioOverlay.querySelector('.audio-title');
+        const infoElement = audioOverlay.querySelector('.audio-info');
+        
+        if (media.metadata && media.metadata.title) {
+            titleElement.textContent = media.metadata.title;
+            infoElement.textContent = 'Now Playing';
+        } else {
+            titleElement.textContent = 'Audio Streaming';
+            infoElement.textContent = 'Now playing audio content';
+        }
+    }
+
+    // Function to hide audio overlay
+    function hideAudioOverlay() {
+        audioOverlay.classList.remove('active');
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
