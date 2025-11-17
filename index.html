@@ -25,6 +25,19 @@
 
         #youtubePlayer { display: none; }
 
+        /* Image display */
+        #imageDisplay {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            background: #000;
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: none;
+            z-index: 10;
+        }
+
         #status {
             position: absolute;
             top: 20px;
@@ -112,6 +125,7 @@
 <div id="status">Connecting...</div>
 <video id="remoteVideo" autoplay playsinline muted="false"></video>
 <div id="youtubePlayer"></div>
+<img id="imageDisplay" src="" alt="Cast Image" />
 <div id="audio-overlay">
     <div class="audio-icon">🔊</div>
     <div class="audio-title">Audio Streaming</div>
@@ -251,12 +265,22 @@
                 const media = loadRequestData.media;
                 if (media && media.contentType) {
                     console.log('Content type:', media.contentType);
+                    console.log('Content URL:', media.contentUrl);
+
+                    // Check if it's image content
+                    if (media.contentType.startsWith('image/')) {
+                        console.log('📷 Image content detected - showing image');
+                        showImage(media);
+                        // Return null to prevent default media player from handling
+                        return null;
+                    }
                     // Check if it's audio content
-                    if (media.contentType.startsWith('audio/')) {
+                    else if (media.contentType.startsWith('audio/')) {
                         console.log('Audio content detected - showing audio overlay');
                         showAudioOverlay(media);
                     } else {
                         hideAudioOverlay();
+                        hideImage();
                     }
                 }
                 return loadRequestData;
@@ -272,6 +296,9 @@
                 if (mediaInformation && mediaInformation.contentType) {
                     if (mediaInformation.contentType.startsWith('audio/')) {
                         showAudioOverlay(mediaInformation);
+                    } else if (mediaInformation.contentType.startsWith('image/')) {
+                        console.log('📷 Image load complete');
+                        // Image is already shown in LOAD interceptor
                     }
                 }
             }
@@ -314,6 +341,47 @@
     // Function to hide audio overlay
     function hideAudioOverlay() {
         audioOverlay.classList.remove('active');
+    }
+
+    // Function to show image
+    function showImage(media) {
+        console.log('📷 showImage called');
+        console.log('   URL:', media.contentUrl);
+        console.log('   Type:', media.contentType);
+        console.log('   Metadata:', media.metadata);
+
+        const imageDisplay = document.getElementById('imageDisplay');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const youtubePlayerEl = document.getElementById('youtubePlayer');
+        const audioOverlay = document.getElementById('audio-overlay');
+
+        // Hide other elements
+        remoteVideo.style.display = 'none';
+        youtubePlayerEl.style.display = 'none';
+        audioOverlay.classList.remove('active');
+
+        // Show and load image
+        imageDisplay.style.display = 'block';
+        imageDisplay.src = media.contentUrl;
+
+        imageDisplay.onload = function() {
+            console.log('✅ Image loaded successfully');
+        };
+
+        imageDisplay.onerror = function(error) {
+            console.error('❌ Failed to load image:', error);
+            console.error('   URL was:', media.contentUrl);
+        };
+
+        console.log('📷 Image element updated, src set to:', media.contentUrl);
+    }
+
+    // Function to hide image
+    function hideImage() {
+        console.log('📷 hideImage called');
+        const imageDisplay = document.getElementById('imageDisplay');
+        imageDisplay.style.display = 'none';
+        imageDisplay.src = '';
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
