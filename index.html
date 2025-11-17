@@ -25,19 +25,6 @@
 
         #youtubePlayer { display: none; }
 
-        /* Image display */
-        #imageDisplay {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-            background: #000;
-            position: absolute;
-            top: 0;
-            left: 0;
-            display: none;
-            z-index: 10;
-        }
-
         #status {
             position: absolute;
             top: 20px;
@@ -125,7 +112,6 @@
 <div id="status">Connecting...</div>
 <video id="remoteVideo" autoplay playsinline muted="false"></video>
 <div id="youtubePlayer"></div>
-<img id="imageDisplay" src="" alt="Cast Image" />
 <div id="audio-overlay">
     <div class="audio-icon">🔊</div>
     <div class="audio-title">Audio Streaming</div>
@@ -224,11 +210,6 @@
                 } else if (data.type === 'YOUTUBE') {
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
-                } else if (data.type === 'SHOW_IMAGE') {
-                    console.log('📷 Received SHOW_IMAGE message');
-                    console.log('   URL:', data.url);
-                    console.log('   Title:', data.title);
-                    showImageFromCustomMessage(data);
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
@@ -266,32 +247,16 @@
         playerManager.setMessageInterceptor(
             cast.framework.messages.MessageType.LOAD,
             loadRequestData => {
-                console.log('📡 LOAD request received');
-                console.log('   Full loadRequestData:', JSON.stringify(loadRequestData, null, 2));
-
+                console.log('Media load request:', loadRequestData);
                 const media = loadRequestData.media;
-                if (media) {
-                    console.log('   media.contentType:', media.contentType);
-                    console.log('   media.contentUrl:', media.contentUrl);
-                    console.log('   media.contentId:', media.contentId);
-                    console.log('   media.streamType:', media.streamType);
-                    console.log('   media.metadata:', media.metadata);
-
-                    if (media.contentType) {
-                        // Check if it's image content
-                        if (media.contentType.startsWith('image/')) {
-                            console.log('📷 Image content detected - will handle after load');
-                            // Store media for later use
-                            window.pendingImageMedia = media;
-                        }
-                        // Check if it's audio content
-                        else if (media.contentType.startsWith('audio/')) {
-                            console.log('Audio content detected - showing audio overlay');
-                            showAudioOverlay(media);
-                        } else {
-                            hideAudioOverlay();
-                            hideImage();
-                        }
+                if (media && media.contentType) {
+                    console.log('Content type:', media.contentType);
+                    // Check if it's audio content
+                    if (media.contentType.startsWith('audio/')) {
+                        console.log('Audio content detected - showing audio overlay');
+                        showAudioOverlay(media);
+                    } else {
+                        hideAudioOverlay();
                     }
                 }
                 return loadRequestData;
@@ -307,12 +272,6 @@
                 if (mediaInformation && mediaInformation.contentType) {
                     if (mediaInformation.contentType.startsWith('audio/')) {
                         showAudioOverlay(mediaInformation);
-                    } else if (mediaInformation.contentType.startsWith('image/')) {
-                        console.log('📷 Image load complete - showing image now');
-                        // Use stored media from LOAD interceptor
-                        const imageMedia = window.pendingImageMedia || mediaInformation;
-                        showImage(imageMedia);
-                        window.pendingImageMedia = null;
                     }
                 }
             }
@@ -355,99 +314,6 @@
     // Function to hide audio overlay
     function hideAudioOverlay() {
         audioOverlay.classList.remove('active');
-    }
-
-    // Function to show image
-    function showImage(media) {
-        console.log('📷 showImage called');
-        console.log('   Full media object:', JSON.stringify(media, null, 2));
-        console.log('   media.contentUrl:', media.contentUrl);
-        console.log('   media.contentId:', media.contentId);
-        console.log('   Type:', media.contentType);
-        console.log('   Metadata:', media.metadata);
-
-        const imageDisplay = document.getElementById('imageDisplay');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const youtubePlayerEl = document.getElementById('youtubePlayer');
-        const audioOverlay = document.getElementById('audio-overlay');
-
-        // Hide other elements
-        remoteVideo.style.display = 'none';
-        youtubePlayerEl.style.display = 'none';
-        audioOverlay.classList.remove('active');
-
-        // Get the URL - try contentUrl first, then contentId
-        const imageUrl = media.contentUrl || media.contentId;
-        console.log('📷 Using URL:', imageUrl);
-
-        if (!imageUrl) {
-            console.error('❌ No URL found! contentUrl and contentId are both null/undefined');
-            console.error('   Check Android side MediaInfo.Builder() - URL must be set');
-            return;
-        }
-
-        // Show and load image
-        imageDisplay.style.display = 'block';
-        imageDisplay.src = imageUrl;
-
-        imageDisplay.onload = function() {
-            console.log('✅ Image loaded successfully from:', imageUrl);
-        };
-
-        imageDisplay.onerror = function(error) {
-            console.error('❌ Failed to load image:', error);
-            console.error('   URL was:', imageUrl);
-            console.error('   Check if URL is accessible from TV network');
-            console.error('   Check if HTTP server is running on Android device');
-        };
-
-        console.log('📷 Image element updated, src set to:', imageUrl);
-    }
-
-    // Function to hide image
-    function hideImage() {
-        console.log('📷 hideImage called');
-        const imageDisplay = document.getElementById('imageDisplay');
-        imageDisplay.style.display = 'none';
-        imageDisplay.src = '';
-    }
-
-    // Function to show image from custom message
-    function showImageFromCustomMessage(data) {
-        console.log('📷 showImageFromCustomMessage called');
-        console.log('   URL:', data.url);
-        console.log('   Title:', data.title);
-        console.log('   ContentType:', data.contentType);
-
-        const imageDisplay = document.getElementById('imageDisplay');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const youtubePlayerEl = document.getElementById('youtubePlayer');
-        const audioOverlay = document.getElementById('audio-overlay');
-
-        // Hide other elements
-        remoteVideo.style.display = 'none';
-        youtubePlayerEl.style.display = 'none';
-        audioOverlay.classList.remove('active');
-
-        if (!data.url) {
-            console.error('❌ No URL in SHOW_IMAGE message');
-            return;
-        }
-
-        // Show and load image
-        imageDisplay.style.display = 'block';
-        imageDisplay.src = data.url;
-
-        imageDisplay.onload = function() {
-            console.log('✅ Image loaded successfully from:', data.url);
-        };
-
-        imageDisplay.onerror = function(error) {
-            console.error('❌ Failed to load image:', error);
-            console.error('   URL was:', data.url);
-        };
-
-        console.log('📷 Image element updated, src set to:', data.url);
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
