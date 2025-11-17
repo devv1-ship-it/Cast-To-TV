@@ -224,6 +224,9 @@
                 } else if (data.type === 'YOUTUBE') {
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
+                } else if (data.type === 'YT_COMMAND') {
+                    console.log('[YT_CONTROL] Received YT_COMMAND:', data.command);
+                    handleYouTubeCommand(data);
                 } else if (data.type === 'SHOW_IMAGE') {
                     console.log('📷 Received SHOW_IMAGE message');
                     console.log('   URL:', data.url);
@@ -398,10 +401,11 @@
     }
 
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
-    let youtubePlayer = null;
-    let isYouTubeApiReady = false;
-    let isYouTubeApiLoading = false;
-    let pendingVideoId = null;
+    // Make youtubePlayer global so handleYouTubeCommand can access it
+    var youtubePlayer = null;
+    var isYouTubeApiReady = false;
+    var isYouTubeApiLoading = false;
+    var pendingVideoId = null;
 
     function loadYouTubeVideo(videoId) {
         console.log(`[DEBUG] 1. loadYouTubeVideo called with ID: ${videoId}`);
@@ -494,7 +498,91 @@
         remoteVideo.srcObject = null;
     }
 
-    function initializeAudioContext() {
+    // --- YOUTUBE CONTROL FUNCTIONS ---
+
+    /**
+     * Handle YouTube control commands (play, pause, seek, volume, etc.)
+     * This replaces the need for youtube-controls.js
+     */
+    function handleYouTubeCommand(data) {
+        console.log('[YT_CONTROL] handleYouTubeCommand called');
+        console.log('[YT_CONTROL] data:', data);
+        console.log('[YT_CONTROL] typeof youtubePlayer:', typeof youtubePlayer);
+        console.log('[YT_CONTROL] youtubePlayer value:', youtubePlayer);
+        console.log('[YT_CONTROL] window.youtubePlayer:', window.youtubePlayer);
+
+        // Check if YouTube player is available
+        if (typeof youtubePlayer === 'undefined' || !youtubePlayer) {
+            console.warn('[YT_CONTROL] YouTube player not ready yet');
+            console.warn('[YT_CONTROL] youtubePlayer is:', youtubePlayer);
+            return;
+        }
+
+        const command = data.command;
+        console.log('[YT_CONTROL] Handling command:', command);
+        console.log('[YT_CONTROL] Player state before command:', youtubePlayer.getPlayerState ? youtubePlayer.getPlayerState() : 'N/A');
+
+        try {
+            switch (command) {
+                case 'play':
+                    console.log('[YT_CONTROL] Playing video');
+                    youtubePlayer.playVideo();
+                    console.log('[YT_CONTROL] playVideo() called');
+                    break;
+
+                case 'pause':
+                    console.log('[YT_CONTROL] Pausing video');
+                    youtubePlayer.pauseVideo();
+                    console.log('[YT_CONTROL] pauseVideo() called');
+                    break;
+
+                case 'stop':
+                    console.log('[YT_CONTROL] Stopping video');
+                    youtubePlayer.stopVideo();
+                    console.log('[YT_CONTROL] stopVideo() called');
+                    break;
+
+                case 'seek':
+                    if (data.relative) {
+                        const currentTime = youtubePlayer.getCurrentTime();
+                        const newTime = currentTime + data.seconds;
+                        console.log('[YT_CONTROL] Seeking relative:', data.seconds, 'seconds');
+                        youtubePlayer.seekTo(newTime, true);
+                    } else {
+                        const duration = youtubePlayer.getDuration();
+                        const seekTime = (duration * data.progress) / 100;
+                        console.log('[YT_CONTROL] Seeking to progress:', data.progress, '%');
+                        youtubePlayer.seekTo(seekTime, true);
+                    }
+                    break;
+
+                case 'volume':
+                    const level = data.level || 100;
+                    console.log('[YT_CONTROL] Setting volume to:', level);
+                    youtubePlayer.setVolume(level);
+                    if (level === 0) {
+                        youtubePlayer.mute();
+                    } else {
+                        youtubePlayer.unMute();
+                    }
+                    break;
+
+                default:
+                    console.warn('[YT_CONTROL] Unknown command:', command);
+            }
+
+            // Log player state after command
+            console.log('[YT_CONTROL] Command executed successfully');
+            setTimeout(() => {
+                console.log('[YT_CONTROL] Player state after command:', youtubePlayer.getPlayerState ? youtubePlayer.getPlayerState() : 'N/A');
+            }, 100);
+        } catch (e) {
+            console.error('[YT_CONTROL] Error executing command:', command, e);
+            console.error('[YT_CONTROL] Error stack:', e.stack);
+        }
+    }
+
+    // --- AUDIO FUNCTIONS ---
         try {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: 48000,
@@ -726,6 +814,5 @@
         }
     }
 </script>
-<!--<script src="youtube-controls.js"></script>-->
 </body>
 </html>
