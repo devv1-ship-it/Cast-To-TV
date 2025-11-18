@@ -25,19 +25,6 @@
 
         #youtubePlayer { display: none; }
 
-        /* Image display */
-        #imageDisplay {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-            background: #000;
-            position: absolute;
-            top: 0;
-            left: 0;
-            display: none;
-            z-index: 10;
-        }
-
         #status {
             position: absolute;
             top: 20px;
@@ -125,7 +112,6 @@
 <div id="status">Connecting...</div>
 <video id="remoteVideo" autoplay playsinline muted="false"></video>
 <div id="youtubePlayer"></div>
-<img id="imageDisplay" src="" alt="Cast Image" />
 <div id="audio-overlay">
     <div class="audio-icon">🔊</div>
     <div class="audio-title">Audio Streaming</div>
@@ -224,14 +210,6 @@
                 } else if (data.type === 'YOUTUBE') {
                     console.log('Received YOUTUBE message with videoId:', data.videoId);
                     loadYouTubeVideo(data.videoId);
-                } else if (data.type === 'YT_COMMAND') {
-                    console.log('[YT_CONTROL] Received YT_COMMAND:', data.command);
-                    handleYouTubeCommand(data);
-                } else if (data.type === 'SHOW_IMAGE') {
-                    console.log('📷 Received SHOW_IMAGE message');
-                    console.log('   URL:', data.url);
-                    console.log('   Title:', data.title);
-                    showImageFromCustomMessage(data);
                 }
             } catch (e) {
                 console.error('Message processing error:', e);
@@ -338,82 +316,15 @@
         audioOverlay.classList.remove('active');
     }
 
-    // --- IMAGE DISPLAY FUNCTIONS ---
-
-    // Function to show image from custom message
-    function showImageFromCustomMessage(data) {
-        console.log('📷 showImageFromCustomMessage called');
-        console.log('   URL:', data.url);
-        console.log('   Title:', data.title);
-        console.log('   ContentType:', data.contentType);
-
-        const imageDisplay = document.getElementById('imageDisplay');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const youtubePlayerEl = document.getElementById('youtubePlayer');
-        const audioOverlay = document.getElementById('audio-overlay');
-        const statusEl = document.getElementById('status');
-
-        if (!data.url) {
-            console.error('❌ No URL in SHOW_IMAGE message');
-            return;
-        }
-
-        // Hide other elements
-        remoteVideo.style.display = 'none';
-        youtubePlayerEl.style.display = 'none';
-        audioOverlay.classList.remove('active');
-        statusEl.style.display = 'none'; // Hide status when showing image
-
-        // Show and load image
-        imageDisplay.style.display = 'block';
-        imageDisplay.src = data.url;
-
-        imageDisplay.onload = function() {
-            console.log('✅ Image loaded successfully from:', data.url);
-        };
-
-        imageDisplay.onerror = function(error) {
-            console.error('❌ Failed to load image:', error);
-            console.error('   URL was:', data.url);
-            console.error('   Check if URL is accessible from TV network');
-            console.error('   Check if HTTP server is running on Android device');
-            // Show status with error message
-            statusEl.style.display = 'block';
-            statusEl.textContent = 'Failed to load image';
-        };
-
-        console.log('📷 Image element updated, src set to:', data.url);
-    }
-
-    // Function to hide image and restore other elements
-    function hideImage() {
-        console.log('📷 hideImage called');
-        const imageDisplay = document.getElementById('imageDisplay');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const statusEl = document.getElementById('status');
-
-        imageDisplay.style.display = 'none';
-        imageDisplay.src = '';
-
-        // Restore video and status if needed
-        remoteVideo.style.display = 'block';
-        statusEl.style.display = 'block';
-    }
-
     // --- YOUTUBE FUNCTIONS WITH ENHANCED LOGGING ---
-    // Make youtubePlayer global so handleYouTubeCommand can access it
-    var youtubePlayer = null;
-    var isYouTubeApiReady = false;
-    var isYouTubeApiLoading = false;
-    var pendingVideoId = null;
+    let youtubePlayer = null;
+    let isYouTubeApiReady = false;
+    let isYouTubeApiLoading = false;
+    let pendingVideoId = null;
 
     function loadYouTubeVideo(videoId) {
         console.log(`[DEBUG] 1. loadYouTubeVideo called with ID: ${videoId}`);
         pendingVideoId = videoId;
-
-        // Hide image when starting YouTube playback
-        hideImage();
-
         statusEl.style.display = 'none';
         remoteVideo.style.display = 'none';
         youtubePlayerEl.style.display = 'block';
@@ -498,91 +409,7 @@
         remoteVideo.srcObject = null;
     }
 
-    // --- YOUTUBE CONTROL FUNCTIONS ---
-
-    /**
-     * Handle YouTube control commands (play, pause, seek, volume, etc.)
-     * This replaces the need for youtube-controls.js
-     */
-    function handleYouTubeCommand(data) {
-        console.log('[YT_CONTROL] handleYouTubeCommand called');
-        console.log('[YT_CONTROL] data:', data);
-        console.log('[YT_CONTROL] typeof youtubePlayer:', typeof youtubePlayer);
-        console.log('[YT_CONTROL] youtubePlayer value:', youtubePlayer);
-        console.log('[YT_CONTROL] window.youtubePlayer:', window.youtubePlayer);
-
-        // Check if YouTube player is available
-        if (typeof youtubePlayer === 'undefined' || !youtubePlayer) {
-            console.warn('[YT_CONTROL] YouTube player not ready yet');
-            console.warn('[YT_CONTROL] youtubePlayer is:', youtubePlayer);
-            return;
-        }
-
-        const command = data.command;
-        console.log('[YT_CONTROL] Handling command:', command);
-        console.log('[YT_CONTROL] Player state before command:', youtubePlayer.getPlayerState ? youtubePlayer.getPlayerState() : 'N/A');
-
-        try {
-            switch (command) {
-                case 'play':
-                    console.log('[YT_CONTROL] Playing video');
-                    youtubePlayer.playVideo();
-                    console.log('[YT_CONTROL] playVideo() called');
-                    break;
-
-                case 'pause':
-                    console.log('[YT_CONTROL] Pausing video');
-                    youtubePlayer.pauseVideo();
-                    console.log('[YT_CONTROL] pauseVideo() called');
-                    break;
-
-                case 'stop':
-                    console.log('[YT_CONTROL] Stopping video');
-                    youtubePlayer.stopVideo();
-                    console.log('[YT_CONTROL] stopVideo() called');
-                    break;
-
-                case 'seek':
-                    if (data.relative) {
-                        const currentTime = youtubePlayer.getCurrentTime();
-                        const newTime = currentTime + data.seconds;
-                        console.log('[YT_CONTROL] Seeking relative:', data.seconds, 'seconds');
-                        youtubePlayer.seekTo(newTime, true);
-                    } else {
-                        const duration = youtubePlayer.getDuration();
-                        const seekTime = (duration * data.progress) / 100;
-                        console.log('[YT_CONTROL] Seeking to progress:', data.progress, '%');
-                        youtubePlayer.seekTo(seekTime, true);
-                    }
-                    break;
-
-                case 'volume':
-                    const level = data.level || 100;
-                    console.log('[YT_CONTROL] Setting volume to:', level);
-                    youtubePlayer.setVolume(level);
-                    if (level === 0) {
-                        youtubePlayer.mute();
-                    } else {
-                        youtubePlayer.unMute();
-                    }
-                    break;
-
-                default:
-                    console.warn('[YT_CONTROL] Unknown command:', command);
-            }
-
-            // Log player state after command
-            console.log('[YT_CONTROL] Command executed successfully');
-            setTimeout(() => {
-                console.log('[YT_CONTROL] Player state after command:', youtubePlayer.getPlayerState ? youtubePlayer.getPlayerState() : 'N/A');
-            }, 100);
-        } catch (e) {
-            console.error('[YT_CONTROL] Error executing command:', command, e);
-            console.error('[YT_CONTROL] Error stack:', e.stack);
-        }
-    }
-
-    // --- AUDIO FUNCTIONS ---
+    function initializeAudioContext() {
         try {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: 48000,
@@ -592,7 +419,7 @@
         } catch (e) {
             console.error('Failed to initialize AudioContext:', e);
         }
-    
+    }
 
     function handleAudioData(data) {
         if (!audioContext) {
@@ -685,9 +512,6 @@
     async function handleOffer(data) {
         try {
             console.log('Handling offer');
-
-            // Hide image when starting WebRTC screen mirroring
-            hideImage();
 
             const configuration = {
                 iceServers: [{
@@ -814,5 +638,6 @@
         }
     }
 </script>
+<!--<script src="youtube-controls.js"></script>-->
 </body>
 </html>
